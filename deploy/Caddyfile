@@ -1,0 +1,8 @@
+:80 {
+	root * /srv
+	redir / /web/
+	# Journaux des joueurs : restent prives.
+	respond /data/logs/* 404
+	header /data/* Cache-Control "no-cache"
+	file_server
+}

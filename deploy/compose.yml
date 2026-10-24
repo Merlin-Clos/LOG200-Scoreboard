@@ -1,0 +1,31 @@
+# Ladder Isolation. Dans ce dossier : ladder.toml, jars/ et data/ (voir README.md), puis
+#   docker compose up -d
+# La page est servie en HTTP sur le port 8080 ; un reverse proxy peut se placer devant.
+name: isolation-scoreboard
+
+services:
+  ladder:
+    image: ghcr.io/vianatets/log200-scoreboard:${SCOREBOARD_TAG:-latest}
+    # Docker interne + gVisor : chaque jar tourne dans un bac a sable sans reseau.
+    privileged: true
+    restart: unless-stopped
+    volumes:
+      - ./ladder.toml:/srv/ladder.toml:ro
+      - ./jars:/srv/jars:ro
+      - ./data:/srv/data
+      - site:/srv/site
+      - docker:/var/lib/docker
+
+  web:
+    image: caddy:2.11.7-alpine
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - site:/srv/web:ro
+      - ./data:/srv/data:ro
+
+volumes:
+  site:
+  docker:

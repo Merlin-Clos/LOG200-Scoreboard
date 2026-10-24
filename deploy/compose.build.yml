@@ -1,0 +1,7 @@
+# Pour construire l'image depuis les sources au lieu de la telecharger :
+#   docker compose -f compose.yml -f compose.build.yml up -d --build
+services:
+  ladder:
+    build:
+      context: ..
+      dockerfile: deploy/ladder.Dockerfile

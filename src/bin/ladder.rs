@@ -85,6 +85,8 @@ fn default_startup() -> u64 {
 
 /// Au-dela, le journal d'un joueur est tronque : un jar ne doit pas pouvoir remplir le disque.
 const LOG_CAP: usize = 1 << 20;
+/// Pause apres une partie annulee : une config cassee ne doit pas faire tourner le ladder a vide.
+const RETRY_DELAY: Duration = Duration::from_secs(5);
 
 fn main() {
     let args = Args::from_env();
@@ -140,7 +142,10 @@ fn main() {
                         record.result.moves.len()
                     );
                 }
-                Err(e) => eprintln!("   partie {} contre {} annulee : {e}", red.id, black.id),
+                Err(e) => {
+                    eprintln!("   partie {} contre {} annulee : {e}", red.id, black.id);
+                    std::thread::sleep(RETRY_DELAY);
+                }
             }
         }
         *played.entry(key(&a.id, &b.id)).or_default() += 2;

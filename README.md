@@ -12,7 +12,11 @@ java -jar Client-eqXX.jar                       # connects first: plays red
 ./isolation-bot --port 8888 --strategy greedy   # plays black
 ```
 
-The referee checks every move and prints the result at the end (`winner`, and `reason`: `no_moves`, `timeout` or `disconnect`). An illegal move is answered with `4`, like on the official server. To play black, start the bot before your jar. On Windows, run `.\isolation-referee.exe` and `.\isolation-bot.exe`. On macOS, first run `xattr -d com.apple.quarantine isolation-*` so the unsigned binaries can start.
+The referee checks every move and prints the result at the end (`winner`, and `reason`: `no_moves`, `timeout`, `disconnect` or `no_show`). An illegal move is answered with `4`, like on the official server. To play black, start the bot before your jar. On Windows, run `.\isolation-referee.exe` and `.\isolation-bot.exe`. On macOS, first run `xattr -d com.apple.quarantine isolation-*` so the unsigned binaries can start.
+
+## Deploy the leaderboard
+
+`docker compose up -d` with the files of the release's `isolation-scoreboard-deploy.zip`: see [`deploy/README.md`](deploy/README.md) (in French).
 
 ## Getting started
 

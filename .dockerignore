@@ -10,3 +10,11 @@ LICENSE
 # Version control
 .git
 .gitignore
+
+# Construction de l image du ladder
+target/
+data/
+official-server/
+jars/
+deploy/data/
+deploy/jars/

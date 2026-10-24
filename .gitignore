@@ -17,6 +17,7 @@ target/
 # Serveur officiel du cours : binaire de l'enseignant, jamais versionne
 official-server/
 
-# Donnees du ladder et config locale (chemins des jars)
+# Donnees du ladder, jars des equipes et config locale
 data/
+jars/
 ladder.toml
