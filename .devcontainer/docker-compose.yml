@@ -1,0 +1,26 @@
+# Deux services demarres ensemble par VS Code (Reopen in Container) :
+#   - server : serveur de jeu (BoardGame.exe) sous Wine, image et binaire pris dans le depot frere
+#              ../LOG200-Isolation (doit etre clone a cote de ce depot) ; GUI via noVNC (port 6080)
+#   - dev    : Rust, Java, Node, Docker et gVisor ; VS Code s'y attache
+# dev partage la pile reseau de server : le serveur repond sur localhost:8888.
+name: log200-scoreboard
+
+services:
+  server:
+    build:
+      context: ../../LOG200-Isolation/.devcontainer
+      dockerfile: server.Dockerfile
+    volumes:
+      - ../../LOG200-Isolation/server:/opt/boardgame
+    restart: unless-stopped
+
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ..:/workspaces/LOG200-Scoreboard:cached
+    command: sleep infinity
+    network_mode: service:server
+    depends_on:
+      - server

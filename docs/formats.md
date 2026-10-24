@@ -142,10 +142,49 @@ Le serveur envoie une commande par ligne :
 
 Valeurs du plateau : 0 vide, 1 détruite, 3 pion noir, 5 pion rouge, la ligne 12 d'abord, colonnes A à L. Le client répond un coup par ligne, au format `G1-E3-C12`, `G1 E3 C12` ou `G1E3C12`.
 
+## Isolation des joueurs
+
+Le ladder exécute le code des équipes. Chaque partie tourne donc dans des conteneurs jetables sous gVisor (`runsc`), comme dans les correcteurs automatiques CTester et PALS. Les scripts sont dans `sandbox/`, les limites dans la section `[sandbox]` de `ladder.toml`.
+
+```mermaid
+flowchart LR
+    subgraph red["conteneur du rouge"]
+        jr["jar (nobody)"] -- "localhost:8888" --> rr["relais (root)"]
+    end
+    subgraph black["conteneur du noir"]
+        jb["jar (nobody)"] -- "localhost:8888" --> rb["relais (root)"]
+    end
+    subgraph ref["conteneur de l'arbitre"]
+        er[relais rouge] --> a["arbitre (127.0.0.1:8888)"]
+        eb[relais noir] --> a
+    end
+    rr -- "socket Unix red/sock" --> er
+    rb -- "socket Unix black/sock" --> eb
+```
+
+Ce que ça garantit, vérifié avec des jars hostiles :
+
+- Pas de réseau : ni Internet ni DNS.
+- Un jar n'atteint que la socket de sa couleur, et chaque relais n'accepte qu'une connexion. Il ne peut donc pas en ouvrir une seconde pour jouer à la place de l'adversaire. Sous gVisor, deux conteneurs ne partagent pas de loopback, d'où les sockets Unix.
+- Le jar tourne en `nobody`, sans capacités, sur un système de fichiers en lecture seule (sauf un `/tmp` de 64 Mo). Il ne voit ni le jar ni la socket de l'adversaire, et ne peut pas tuer son relais.
+- Mémoire, processus et CPU sont plafonnés, avec un cœur dédié par couleur. Un dépassement de mémoire tue le conteneur du joueur, pas la machine. Les threads Java ne comptent pas dans le plafond de processus.
+- Les conteneurs et les sockets sont supprimés après chaque partie, et au démarrage du ladder après un arrêt brutal.
+
+Le coût : environ 60 ms de plus au démarrage, et 20 à 30 % de calcul en moins sur un test qui alloue beaucoup. C'est pareil pour les deux joueurs, mais un bot va un peu moins loin qu'au tournoi.
+
+Sur la machine du ladder, il faut Docker et gVisor, avec ce runtime dans `/etc/docker/daemon.json` :
+
+```json
+{ "runtimes": { "runsc-host-uds": { "path": "/usr/bin/runsc", "runtimeArgs": ["--host-uds=all"] } } }
+```
+
+`--host-uds` laisse les bacs à sable se connecter aux sockets Unix des répertoires montés ; seul le répertoire de la partie l'est. `sandbox/build.sh` construit ensuite l'image `isolation-sandbox` (Java 24, socat et nos binaires).
+
 ## Mise en route
 
 ```sh
 cargo build --release
+sandbox/build.sh                            # image des bacs a sable
 cp ladder.example.toml ladder.toml          # equipes, temps, session
 target/release/isolation-ladder ladder.toml # Ctrl+C pour arreter, relancer reprend la session
 target/release/isolation-check data/games.jsonl

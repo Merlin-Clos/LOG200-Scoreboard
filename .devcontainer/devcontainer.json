@@ -1,17 +1,37 @@
 {
-    "name": "Template Development Container",
-    "image": "mcr.microsoft.com/devcontainers/base:bookworm",
-    "customizations": {
-        "settings": {
-            "terminal.integrated.shell.linux": "/bin/bash"
+    "name": "LOG200 - Scoreboard (Rust + Java + gVisor)",
+    "dockerComposeFile": "docker-compose.yml",
+    "service": "dev",
+    "runServices": ["dev", "server"],
+    "workspaceFolder": "/workspaces/LOG200-Scoreboard",
+    "shutdownAction": "stopCompose",
+    "features": {
+        "ghcr.io/devcontainers/features/node:1": { "version": "24" },
+        "ghcr.io/devcontainers/features/rust:1": { "version": "latest", "profile": "minimal" },
+        // dockerd dans le conteneur, ou runsc peut etre enregistre (Docker Desktop ne le permet pas)
+        "ghcr.io/devcontainers/features/docker-in-docker:4": { "moby": false }
+    },
+    "forwardPorts": [6080, 8888],
+    "portsAttributes": {
+        "6080": {
+            "label": "Serveur Isolation (GUI)",
+            "onAutoForward": "openPreview"
         },
+        "8888": {
+            "label": "Serveur Isolation (jeu)",
+            "onAutoForward": "silent"
+        }
+    },
+    "customizations": {
         "vscode": {
             "extensions": [
-                "ms-vscode.atom-keybindings",
-                "ms-vscode-remote.remote-containers",
                 "ms-azuretools.vscode-docker",
-                "myriad-dreamin.tinymist"
-            ]
+                "EditorConfig.EditorConfig",
+                "rust-lang.rust-analyzer"
+            ],
+            "settings": {
+                "terminal.integrated.defaultProfile.linux": "bash"
+            }
         }
     },
     "remoteUser": "vscode"

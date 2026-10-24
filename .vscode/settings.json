@@ -7,11 +7,5 @@
     "files.trimTrailingWhitespace": true,
     "[yaml]": {
         "editor.tabSize": 2
-    },
-    "github.copilot.chat.commitMessageGeneration.instructions": [
-        {
-            "file": ".copilot/commit-message-instructions.md"
-        }
-    ]
-
+    }
 }

@@ -1,9 +1,14 @@
 # Configuration du ladder. Copier en ladder.toml (ignore par git) et adapter.
-# Lancement : isolation-ladder ladder.toml [--rounds N]
+# Prerequis : Docker avec gVisor (runtime runsc-host-uds, voir docs/formats.md) et l'image construite
+# par sandbox/build.sh. Lancement : isolation-ladder ladder.toml [--rounds N]
+#
+# Pour developper sans Docker, lancer l'arbitre et les joueurs directement :
+#   referee = ["target/release/isolation-referee", "--port", "{port}", "--time-ms", "{time_ms}", "--opening", "{opening}"]
+#   cmd = ["target/release/isolation-bot", "--strategy", "greedy", "--port", "{port}"]
+# et retirer cleanup. Les jars tournent alors sans aucune isolation.
 
 # Arbitre : n'importe quel programme qui respecte le contrat (docs/formats.md).
-# {port}, {time_ms} et {opening} sont substitues.
-referee = ["target/release/isolation-referee", "--port", "{port}", "--time-ms", "{time_ms}", "--opening", "{opening}"]
+referee = ["sandbox/run-referee.sh", "{game}", "{port}", "{time_ms}", "{opening}"]
 port = 8888
 time_ms = 500
 session = "ladder-2026-11"
@@ -16,15 +21,39 @@ ready_marker = "LISTENING"
 red_connected_marker = "CONNECTED red"
 startup_ms = 1000
 
-# Bot de test glouton. `anchor = true` sur une equipe fige son rating a 1500.
+# Duree max d'une partie (par defaut 144 coups au temps max, plus 2 minutes).
+# game_timeout_s = 300
+
+# Lancee apres chaque partie, meme en echec, avec l'id de la partie dans {game}. Aussi lancee au
+# demarrage avec {game} vide, pour nettoyer apres un Ctrl+C.
+cleanup = ["sandbox/cleanup.sh", "{game}"]
+
+# Exporte en SANDBOX_<CLE> pour les scripts de sandbox/. Les limites s'appliquent a chaque joueur.
+[sandbox]
+image = "isolation-sandbox"
+runtime = "runsc-host-uds"
+rundir = "/tmp/isolation-ladder"
+memory = "512m"
+java_heap = "384m"
+cpus = "1"
+# Plafond de processus (fork). Sous gVisor, les threads Java n'y sont pas comptes.
+pids = "128"
+# Un coeur dedie par couleur, pour que les deux joueurs aient la meme puissance de calcul.
+cpuset_red = "2"
+cpuset_black = "3"
+# Si GameConnection vise un nom d'hote plutot que localhost, il est redirige vers le relais.
+# host_alias = "isolation.example.ca"
+
+# Dans cmd, {port}, {game} et {side} (red ou black) sont remplaces.
+# `anchor = true` sur une equipe fige son rating a 1500.
 [[team]]
 id = "glouton"
-cmd = ["target/release/isolation-bot", "--strategy", "greedy", "--port", "{port}"]
+cmd = ["sandbox/run-player.sh", "{game}", "{side}", "{port}", "--bot", "greedy"]
 
 [[team]]
 id = "eq01"
-cmd = ["java", "-jar", "jars/Client-eq01.jar"]
+cmd = ["sandbox/run-player.sh", "{game}", "{side}", "{port}", "jars/eq01/current.jar"]
 
 [[team]]
 id = "eq02"
-cmd = ["java", "-jar", "jars/Client-eq02.jar"]
+cmd = ["sandbox/run-player.sh", "{game}", "{side}", "{port}", "jars/eq02/current.jar"]
