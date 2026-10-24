@@ -1,0 +1,69 @@
+# Envoie le jar de l'equipe au ladder a chaque push sur main qui modifie src/.
+# A copier dans .github/workflows/ du depot de l'equipe, puis dans Settings > Secrets and variables > Actions :
+#   variable LADDER_URL   : adresse de la page du ladder, par exemple http://ladder.example.org:8080
+#   secret   LADDER_TOKEN : token de l'equipe (isolation-ladder add-team)
+# Sans LADDER_URL, le workflow ne fait rien. Le verdict du ladder s'affiche dans le resume du run.
+name: Ladder
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+    paths: ['src/**']
+  workflow_dispatch:
+
+# Une soumission a la fois : la suivante attend la fin du smoke test de la precedente.
+concurrency:
+  group: ladder
+  cancel-in-progress: false
+
+jobs:
+  submit:
+    name: Envoyer le jar au ladder
+    if: vars.LADDER_URL != ''
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '24'
+
+      # Le ladder execute les jars avec Java 24 : --release 24 garde le jar compatible meme avec un JDK plus recent.
+      - name: Construire le jar
+        run: |
+          javac -encoding UTF-8 --release 24 -d bin src/*.java
+          jar --create --file client.jar --main-class Client -C bin .
+
+      - name: Soumettre au ladder
+        env:
+          LADDER_URL: ${{ vars.LADDER_URL }}
+          LADDER_TOKEN: ${{ secrets.LADDER_TOKEN }}
+        run: |
+          if [ -z "$LADDER_TOKEN" ]; then
+            echo "::error::Secret LADDER_TOKEN absent (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+          # Le smoke test joue deux parties et attend la fin de la partie en cours : compter quelques minutes.
+          code=$(curl -sS --max-time 900 -o response.txt -w '%{http_code}' -X PUT \
+            -H "Authorization: Bearer $LADDER_TOKEN" --data-binary @client.jar \
+            "${LADDER_URL%/}/api/submit") || code=000
+          body=$(cat response.txt 2>/dev/null)
+          echo "HTTP $code : $body"
+          {
+            echo "### Ladder : HTTP $code"
+            echo
+            echo "$body"
+            echo
+            echo "Classement : ${LADDER_URL%/}/"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" != 200 ]; then
+            echo "::error::${body:-ladder injoignable a $LADDER_URL}"
+            exit 1
+          fi

@@ -65,6 +65,27 @@
                     <span id="step-label" class="muted"></span>
                 </div>
             </section>
+
+            <section id="submit-panel" class="panel submit" aria-labelledby="submit-title" hidden>
+                <h2 id="submit-title">Soumettre un jar</h2>
+                <form id="submit-form">
+                    <label>
+                        Token de l'équipe
+                        <input id="submit-token" type="password" autocomplete="off" required />
+                    </label>
+                    <label>
+                        Jar
+                        <input id="submit-file" type="file" accept=".jar" required />
+                    </label>
+                    <button id="submit-button" type="submit">Envoyer</button>
+                </form>
+                <p id="submit-status" class="note" role="status"></p>
+                <p class="note">
+                    Le jar joue deux parties de test contre un bot aléatoire. S'il les termine sans
+                    dépasser le temps ni planter, il remplace le jar actif de l'équipe. Comptez jusqu'à
+                    deux minutes.
+                </p>
+            </section>
         </main>
     </body>
 </html>

@@ -180,6 +180,41 @@ Sur la machine du ladder, il faut Docker et gVisor, avec ce runtime dans `/etc/d
 
 `--host-uds` laisse les bacs à sable se connecter aux sockets Unix des répertoires montés ; seul le répertoire de la partie l'est. `sandbox/build.sh` construit ensuite l'image `isolation-sandbox` (Java 24, socat et nos binaires).
 
+## Soumission des jars
+
+Le ladder reçoit les jars des équipes par HTTP, si `ladder.toml` a une section `[submit]`. Dans le déploiement Docker, la page relaie `/api/` vers ce service.
+
+```
+PUT /api/submit
+Authorization: Bearer <token de l'équipe>
+<le jar, tel quel, dans le corps de la requête>
+```
+
+```sh
+curl -T Client-eq07.jar -H "Authorization: Bearer $TOKEN" https://<ladder>/api/submit
+```
+
+Le formulaire de la page fait la même chose. Le token identifie l'équipe : `isolation-ladder add-team eq07` l'inscrit et affiche son token une seule fois ; seul son sha256 est conservé (`jars/teams.toml`).
+
+À la réception :
+
+1. Le jar est comparé au jar actif de l'équipe. S'il est identique, rien ne se passe.
+2. Une équipe ne peut soumettre qu'une fois par `min_interval_s` (5 minutes par défaut), et le jar ne doit pas dépasser `max_jar_mb`.
+3. Smoke test : le jar joue une partie dans chaque couleur, dans le bac à sable, contre le bot aléatoire. Il peut perdre, mais pas par dépassement de temps, déconnexion, absence ou coups invalides. Il attend la fin de la partie en cours du ladder : compter jusqu'à une ou deux minutes.
+4. S'il passe, il remplace atomiquement `jars/<équipe>/current.jar` (l'ancien reste dans `history/`) et joue dès la partie suivante. Une équipe inscrite entre au classement avec son premier jar accepté.
+
+| Code | Sens |
+| --- | --- |
+| 200 | Accepté, ou identique au jar actif. |
+| 400 | Le corps n'est pas un jar. |
+| 401 | Token absent ou inconnu. |
+| 413 | Jar trop gros. |
+| 422 | Refusé par le smoke test ; la raison est dans la réponse et le jar actif reste en jeu. |
+| 429 | Trop tôt depuis la soumission précédente. |
+| 500 | Erreur du ladder pendant le smoke test : réessayer plus tard. |
+
+La réponse est un texte court destiné à l'équipe. Chaque soumission est notée dans `jars/submissions.jsonl`, qui n'est pas publié.
+
 ## Mise en route
 
 ```sh

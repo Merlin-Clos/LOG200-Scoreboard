@@ -206,5 +206,37 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowRight') goTo(replay.index + 1)
 })
 
+// Le formulaire n'apparait que si le service de soumission repond (absent en hebergement statique).
+const API = '../api'
+
+async function setupSubmit() {
+    try {
+        const res = await fetch(`${API}/health`, { cache: 'no-store' })
+        if (!res.ok) return
+    } catch {
+        return
+    }
+    $('submit-panel').hidden = false
+    $('submit-form').addEventListener('submit', async (e) => {
+        e.preventDefault()
+        const file = $('submit-file').files[0]
+        $('submit-button').disabled = true
+        $('submit-status').textContent = 'Parties de test en cours…'
+        try {
+            const res = await fetch(`${API}/submit`, {
+                method: 'PUT',
+                headers: { Authorization: `Bearer ${$('submit-token').value.trim()}` },
+                body: file,
+            })
+            $('submit-status').textContent = (await res.text()).trim()
+        } catch (err) {
+            $('submit-status').textContent = `Envoi impossible : ${err.message}`
+        } finally {
+            $('submit-button').disabled = false
+        }
+    })
+}
+
 refresh()
 setInterval(refresh, REFRESH_MS)
+setupSubmit()

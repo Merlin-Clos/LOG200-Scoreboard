@@ -289,6 +289,25 @@ button:hover {
     border-color: var(--accent);
 }
 
+.submit form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: end;
+}
+
+.submit label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.9rem;
+}
+
+.submit input {
+    font: inherit;
+    color: inherit;
+}
+
 @media (max-width: 860px) {
     main {
         grid-template-columns: minmax(0, 1fr);

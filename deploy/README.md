@@ -11,25 +11,32 @@ Le ladder et sa page tournent avec un `docker compose up -d`. Chaque jar joue da
 ## Installation
 
 1. Télécharger `isolation-scoreboard-deploy.zip` depuis la [dernière release](https://github.com/VianAtETS/LOG200-Scoreboard/releases/latest) et l'extraire.
-2. Créer la config : `cp ladder.example.toml ladder.toml`, puis régler la session, le temps par coup et les équipes.
-3. Déposer chaque jar en `jars/<équipe>/current.jar`, avec une entrée `[[team]]` correspondante dans `ladder.toml`.
-4. Lancer `docker compose up -d`. La page est sur `http://<machine>:8080/` (autre port : `WEB_PORT=80 docker compose up -d`).
+2. Créer la config : `cp ladder.example.toml ladder.toml`, puis régler au moins la session et le temps par coup.
+3. Lancer `docker compose up -d`. La page est sur `http://<machine>:8080/` (autre port : `WEB_PORT=80 docker compose up -d`).
+
+## Inscrire les équipes
+
+Les équipes soumettent elles-mêmes leur jar (formulaire de la page, `curl` ou CI ; voir « Soumission des jars » dans `docs/formats.md`). Pour chaque équipe :
+
+```sh
+docker compose exec ladder isolation-ladder add-team eq07
+```
+
+La commande affiche le token de l'équipe, une seule fois : le lui transmettre en privé. Une équipe entre au classement dès que son premier jar a passé le smoke test ; inutile de redémarrer.
 
 ## Au quotidien
 
 | Pour… | Faire |
 | --- | --- |
 | Suivre les parties | `docker compose logs -f ladder` |
-| Remplacer le jar d'une équipe | copier le nouveau jar à côté puis `mv` sur `current.jar` ; il sert dès la partie suivante, et son nouveau hash compte comme une nouvelle soumission |
-| Ajouter une équipe | ajouter le jar et l'entrée `[[team]]`, puis `docker compose restart ladder` |
+| Voir les soumissions | `jars/submissions.jsonl` (verdict et raison de chaque refus) |
+| Retirer une équipe | supprimer sa ligne dans `jars/teams.toml` et son dossier `jars/<équipe>/` |
 | Mettre à jour | `docker compose pull && docker compose up -d` |
 | Fixer une version | `SCOREBOARD_TAG=v0.2.0 docker compose up -d` |
 | Arrêter | `docker compose down` (les parties restent dans `data/`) |
 | Sauvegarder | copier `data/games.jsonl` |
 
-`mv` plutôt qu'une copie par-dessus `current.jar` : une partie en cours garde l'ancien fichier au lieu de lire un jar à moitié écrit.
-
-Les journaux des joueurs vont dans `data/logs/`. La page ne les sert pas.
+Les journaux des joueurs vont dans `data/logs/`, les jars et les tokens dans `jars/`. La page ne sert ni l'un ni l'autre.
 
 ## Nom de domaine et HTTPS
 
