@@ -2,6 +2,21 @@
 
 Live leaderboard (Elo, game history, replays) for the Isolation lab of LOG200.
 
+![Leaderboard page: Elo ranking, recent games and the replay of one game](docs/images/leaderboard.png)
+
+Each team submits its jar; the ladder makes the teams play each other around the clock and the page shows the result:
+
+```mermaid
+flowchart LR
+    CI["Team repo<br>(CI on push to main)"] --> API
+    Form["Page form or curl"] --> API
+    API["PUT /api/submit<br>team token"] --> Smoke{"Smoke test<br>vs random bot"}
+    Smoke -- fails --> Reason["Rejected, reason<br>sent back"]
+    Smoke -- passes --> Ladder["Ladder<br>games in gVisor sandboxes"]
+    Ladder --> Games[("data/games.jsonl")]
+    Games --> Page["Page<br>Elo, games, replays"]
+```
+
 ## Test your bot
 
 No official server and nothing to compile: download the archive for your system from the [latest release](https://github.com/VianAtETS/LOG200-Scoreboard/releases/latest) and extract it. Then, in three terminals and in this order:
@@ -32,10 +47,11 @@ The referee checks every move and prints the result at the end (`winner`, and `r
 | `src/rules.rs` | Game rules as applied by the official server (see `docs/rules.md`) |
 | `isolation-referee` | Headless referee for one game; speaks the official protocol, prints one JSON result |
 | `isolation-bot` | Protocol client with a simple strategy (random or greedy), used for tests and conformance checks |
-| `isolation-ladder` | Schedules games between teams, appends to `data/games.jsonl` |
+| `isolation-ladder` | Schedules games between teams, appends to `data/games.jsonl`, and receives the teams' jars (`PUT /api/submit`, see `docs/formats.md`) |
 | `isolation-check` | Replays and validates a JSONL file or an official save (`BOARDGAME 1`) |
 | `sandbox/` | gVisor sandboxes for the referee and each player (see `docs/formats.md`) |
 | `web/` | Static page (vanilla JS): Elo ranking, recent games, replay |
+| `templates/ladder.yml` | GitHub Actions workflow for the team repositories: builds the jar and submits it on every push to `main` |
 
 The referee contract and the JSONL format are described in `docs/formats.md`. Any referee that follows it, such as the official C++ CLI, can replace ours.
 

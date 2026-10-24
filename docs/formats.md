@@ -215,6 +215,26 @@ Le formulaire de la page fait la même chose. Le token identifie l'équipe : `is
 
 La réponse est un texte court destiné à l'équipe. Chaque soumission est notée dans `jars/submissions.jsonl`, qui n'est pas publié.
 
+### Depuis la CI
+
+[`templates/ladder.yml`](../templates/ladder.yml) est un workflow GitHub Actions à placer dans `.github/workflows/` du dépôt de chaque équipe (ou dans le template du lab). À chaque push sur `main` qui modifie `src/`, il compile `src/*.java` pour Java 24, construit le jar avec `Client` comme classe principale et le soumet. Le verdict du ladder s'affiche dans le résumé du run, et le run échoue si le jar est refusé.
+
+Réglages du dépôt, dans Settings > Secrets and variables > Actions :
+
+| Nom | Type | Valeur |
+| --- | --- | --- |
+| `LADDER_URL` | variable | adresse de la page du ladder, par exemple `http://ladder.example.org:8080` |
+| `LADDER_TOKEN` | secret | token de l'équipe |
+
+Sans `LADDER_URL`, le job est sauté : le workflow peut donc vivre dans le template avant que le ladder existe. Le jar est reproductible (date des entrées fixée à celle du commit) : relancer un run sur le même commit répond « déjà actif » au lieu de créer une nouvelle version. La machine du ladder doit être joignable depuis les runners GitHub ; sinon, les équipes passent par le formulaire de la page.
+
+Pour essayer le workflow en local avec [act](https://github.com/nektos/act), depuis un dépôt d'équipe et avec le ladder lancé sur la même machine :
+
+```sh
+act workflow_dispatch -P ubuntu-latest=catthehacker/ubuntu:act-latest --network host \
+  --var LADDER_URL=http://localhost:8080 --secret LADDER_TOKEN=<token>
+```
+
 ## Mise en route
 
 ```sh

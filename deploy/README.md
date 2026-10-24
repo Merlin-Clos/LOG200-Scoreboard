@@ -24,6 +24,8 @@ docker compose exec ladder isolation-ladder add-team eq07
 
 La commande affiche le token de l'équipe, une seule fois : le lui transmettre en privé. Une équipe entre au classement dès que son premier jar a passé le smoke test ; inutile de redémarrer.
 
+Pour que chaque push sur `main` soumette le jar, ajouter [`templates/ladder.yml`](https://github.com/VianAtETS/LOG200-Scoreboard/blob/main/templates/ladder.yml) au template du lab. Chaque équipe règle alors la variable `LADDER_URL` et le secret `LADDER_TOKEN` de son dépôt (voir « Depuis la CI » dans `docs/formats.md`).
+
 ## Au quotidien
 
 | Pour… | Faire |
