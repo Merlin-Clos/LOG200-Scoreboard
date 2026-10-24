@@ -1,5 +1,5 @@
 //! isolation-referee : arbitre d'une partie, avec le protocole du serveur officiel.
-//! Le contrat (marqueurs sur stderr, JSON sur stdout, codes de sortie) est dans docs/formats.md.
+//! Le contrat (marqueurs sur stderr, JSON sur stdout) est dans docs/formats.md.
 //!
 //! Usage : isolation-referee --port P --time-ms T [--opening "G1-G3-F9,F12-F10-G7"]
 //!                           [--max-invalid N] [--connect-timeout-ms 30000] [--bind 127.0.0.1]
@@ -52,13 +52,16 @@ fn main() {
     let listener = TcpListener::bind((bind, port)).unwrap_or_else(|e| die(&format!("ecoute sur {bind}:{port} : {e}")));
     eprintln!("LISTENING {port}");
 
-    let deadline = Instant::now() + connect_timeout;
+    let start = Instant::now();
     let mut players: Vec<LineConn> = Vec::with_capacity(2);
+    let mut absent = None;
     for color in [Color::Red, Color::Black] {
-        let stream = accept(&listener, deadline).unwrap_or_else(|| {
-            eprintln!("erreur : joueur {} non connecte", color.name());
-            std::process::exit(3)
-        });
+        // Un delai par joueur : le ladder ne lance le noir qu'apres la connexion du rouge.
+        let Some(stream) = accept(&listener, Instant::now() + connect_timeout) else {
+            eprintln!("{} ne s'est pas connecte", color.name());
+            absent = Some(color);
+            break;
+        };
         let mut conn = LineConn::new(stream).unwrap_or_else(|e| die(&format!("socket : {e}")));
         eprintln!("CONNECTED {}", color.name());
         let mut hello = vec![ServerMsg::NewGame {
@@ -80,7 +83,6 @@ fn main() {
         players.push(conn);
     }
 
-    let start = Instant::now();
     let mut game = Referee {
         board,
         players,
@@ -89,7 +91,22 @@ fn main() {
         moves: Vec::new(),
         invalid: InvalidCounts::default(),
     };
-    let (winner, reason) = game.run();
+    let (winner, reason) = match absent {
+        // Le joueur absent perd sans qu'aucun coup soit joue ; le rouge, s'il est la, est prevenu.
+        Some(color) => {
+            if color == Color::Black {
+                game.send(
+                    Color::Red,
+                    &ServerMsg::End {
+                        result: "WIN".into(),
+                        last: None,
+                    },
+                );
+            }
+            (color.other(), Reason::NoShow)
+        }
+        None => game.run(),
+    };
     for p in &game.players {
         p.shutdown();
     }

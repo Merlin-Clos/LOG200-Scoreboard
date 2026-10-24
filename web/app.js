@@ -16,6 +16,7 @@ const REASONS = {
     timeout: 'temps',
     disconnect: 'déconnexion',
     protocol: 'coups invalides',
+    no_show: 'absent',
 }
 
 let lastText = null

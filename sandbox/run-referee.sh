@@ -10,4 +10,5 @@ exec docker run --rm --name "$game-referee" --label isolation-ladder \
     --runtime "$SANDBOX_RUNTIME" --network none --read-only \
     -v "$dir/red:/chan/red" -v "$dir/black:/chan/black" \
     "$SANDBOX_IMAGE" referee-entry.sh "$port" \
-    isolation-referee --port "$port" --time-ms "$time_ms" --opening "$opening"
+    isolation-referee --port "$port" --time-ms "$time_ms" --opening "$opening" \
+    --connect-timeout-ms "${SANDBOX_CONNECT_TIMEOUT_MS:-10000}"

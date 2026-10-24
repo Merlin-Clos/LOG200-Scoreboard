@@ -35,6 +35,8 @@ runtime = "runsc-host-uds"
 rundir = "/tmp/isolation-ladder"
 memory = "512m"
 java_heap = "384m"
+# Delai pour se connecter a l'arbitre ; au-dela, le joueur perd la partie (no_show).
+connect_timeout_ms = "10000"
 cpus = "1"
 # Plafond de processus (fork). Sous gVisor, les threads Java n'y sont pas comptes.
 pids = "128"

@@ -2,6 +2,18 @@
 
 Live leaderboard (Elo, game history, replays) for the Isolation lab of LOG200.
 
+## Test your bot
+
+No official server and nothing to compile: download the archive for your system from the [latest release](https://github.com/VianAtETS/LOG200-Scoreboard/releases/latest) and extract it. Then, in three terminals and in this order:
+
+```sh
+./isolation-referee --port 8888 --time-ms 5000
+java -jar Client-eqXX.jar                       # connects first: plays red
+./isolation-bot --port 8888 --strategy greedy   # plays black
+```
+
+The referee checks every move and prints the result at the end (`winner`, and `reason`: `no_moves`, `timeout` or `disconnect`). An illegal move is answered with `4`, like on the official server. To play black, start the bot before your jar. On Windows, run `.\isolation-referee.exe` and `.\isolation-bot.exe`. On macOS, first run `xattr -d com.apple.quarantine isolation-*` so the unsigned binaries can start.
+
 ## Getting started
 
 1. Optional, for conformance checks: copy the official game server from the course (`BoardGame.exe` and its DLLs and folders) into `official-server/`. It is never committed (the folder is git-ignored). Without it, everything else still works.

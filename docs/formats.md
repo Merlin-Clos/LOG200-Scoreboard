@@ -38,7 +38,7 @@ Le ladder lance l'arbitre à partir d'un gabarit configurable (`referee` dans `l
 1. L'arbitre écoute sur le port et écrit `LISTENING <port>` sur sa sortie d'erreur.
 2. La première connexion est le rouge, la seconde le noir. Après chacune, il écrit `CONNECTED red` puis `CONNECTED black` sur sa sortie d'erreur. Le ladder attend `CONNECTED red` avant de lancer le noir : sans ça, une JVM qui démarre plus lentement inverserait les couleurs.
 3. Il applique le protocole du serveur officiel (voir plus bas).
-4. À la fin, il écrit un seul objet JSON, sur une ligne, sur sa sortie standard, et sort avec le code 0 quel que soit le gagnant. Le code 3 signifie qu'un joueur ne s'est pas connecté ; aucune partie n'est alors enregistrée.
+4. À la fin, il écrit un seul objet JSON, sur une ligne, sur sa sortie standard, et sort avec le code 0 quel que soit le gagnant. Un joueur qui ne se connecte pas dans le délai perd la partie (`no_show`) sans qu'aucun coup soit joué ; si c'est le rouge, le ladder ne lance pas le noir.
 
 ```mermaid
 sequenceDiagram
@@ -94,7 +94,7 @@ Si une autre implémentation n'écrit pas `LISTENING` ni `CONNECTED red`, il suf
 | `opening` | liste | Demi-coups imposés (peut être vide). |
 | `moves` | liste | Coups des clients au format `G1-E3-C12` (départ, arrivée, case détruite). |
 | `winner` | `"red"` ou `"black"` | Il n'y a pas de nulle en Isolation. |
-| `reason` | chaîne | `no_moves` : le perdant n'avait plus de coup. `timeout` : temps dépassé. `disconnect` : connexion perdue. `protocol` : trop de coups invalides, si une limite est fixée. |
+| `reason` | chaîne | `no_moves` : le perdant n'avait plus de coup. `timeout` : temps dépassé. `disconnect` : connexion perdue. `protocol` : trop de coups invalides, si une limite est fixée. `no_show` : le perdant ne s'est jamais connecté (jar qui plante au démarrage, conteneur tué). |
 | `invalid` | objet | Nombre de coups refusés (`4`) par couleur. |
 | `duration_ms` | entier | Durée de la partie. |
 

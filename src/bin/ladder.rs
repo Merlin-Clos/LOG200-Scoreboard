@@ -325,16 +325,17 @@ fn play(cfg: &Config, red: &Team, black: &Team, opening: &[String]) -> Result<Ga
             }
         }
     });
-    let wait_for = |marker: &str| -> Result<(), String> {
+    let wait_for = |marker: &str| -> Result<bool, String> {
         if marker.is_empty() {
             std::thread::sleep(Duration::from_millis(cfg.startup_ms));
-            return Ok(());
+            return Ok(true);
         }
         loop {
             match rx.recv_timeout(Duration::from_secs(60)) {
-                Ok(line) if line.trim().starts_with(marker) => return Ok(()),
+                Ok(line) if line.trim().starts_with(marker) => return Ok(true),
                 Ok(_) => continue,
-                Err(_) => return Err(format!("arbitre : `{marker}` jamais recu")),
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(false),
+                Err(mpsc::RecvTimeoutError::Timeout) => return Err(format!("arbitre : `{marker}` jamais recu")),
             }
         }
     };
@@ -346,8 +347,11 @@ fn play(cfg: &Config, red: &Team, black: &Team, opening: &[String]) -> Result<Ga
     };
     wait_for(&cfg.ready_marker)?;
     let _red = player(red, "red")?;
-    wait_for(&cfg.red_connected_marker)?;
-    let _black = player(black, "black")?;
+    let _black = if wait_for(&cfg.red_connected_marker)? {
+        Some(player(black, "black")?)
+    } else {
+        None
+    };
 
     // Lecture dans un thread pour pouvoir abandonner une partie qui ne finit jamais.
     let (json_tx, json_rx) = mpsc::channel::<String>();

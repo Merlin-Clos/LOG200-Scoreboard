@@ -19,6 +19,8 @@ pub enum Reason {
     Disconnect,
     /// Le joueur n'a jamais envoye de coup valide malgre les `4` (voir `--max-invalid`).
     Protocol,
+    /// Le joueur ne s'est jamais connecte (jar qui plante au demarrage, conteneur tue...).
+    NoShow,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
@@ -81,6 +83,8 @@ impl GameResult {
         let all = self.opening.iter().chain(&self.moves).map(String::as_str);
         let (_, turn, winner) = rules::replay(all).map_err(|(i, m)| format!("coup {i} illegal : {m}"))?;
         match self.reason {
+            Reason::NoShow if !self.moves.is_empty() => Err("no_show annonce apres des coups joues".into()),
+            Reason::NoShow => Ok(()),
             Reason::NoMoves if winner != Some(self.winner) => {
                 Err(format!("no_moves annonce, gagnant rejoue : {winner:?}"))
             }
@@ -206,6 +210,20 @@ mod tests {
         let mut no_moves = sample().result;
         no_moves.reason = Reason::NoMoves;
         assert!(no_moves.validate().is_err());
+    }
+
+    #[test]
+    fn no_show_requires_no_moves_and_accepts_either_winner() {
+        let mut absent = sample().result;
+        absent.reason = Reason::NoShow;
+        assert!(absent.validate().is_err());
+        absent.moves.clear();
+        for winner in [Color::Red, Color::Black] {
+            absent.winner = winner;
+            assert!(absent.validate().is_ok(), "{winner:?}");
+        }
+        let v: serde_json::Value = serde_json::to_value(Reason::NoShow).unwrap();
+        assert_eq!(v, "no_show");
     }
 
     #[test]
