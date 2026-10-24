@@ -1,0 +1,30 @@
+# Configuration du ladder. Copier en ladder.toml (ignore par git) et adapter.
+# Lancement : isolation-ladder ladder.toml [--rounds N]
+
+# Arbitre : n'importe quel programme qui respecte le contrat (docs/formats.md).
+# {port}, {time_ms} et {opening} sont substitues.
+referee = ["target/release/isolation-referee", "--port", "{port}", "--time-ms", "{time_ms}", "--opening", "{opening}"]
+port = 8888
+time_ms = 500
+session = "ladder-2026-11"
+out = "data/games.jsonl"
+# Demi-coups aleatoires en debut de partie (pair). Mettre 0 si un client ignore le plateau initial.
+opening_plies = 2
+
+# Lignes attendues sur la sortie d'erreur de l'arbitre. Vides : attente fixe de startup_ms.
+ready_marker = "LISTENING"
+red_connected_marker = "CONNECTED red"
+startup_ms = 1000
+
+# Bot de test glouton. `anchor = true` sur une equipe fige son rating a 1500.
+[[team]]
+id = "glouton"
+cmd = ["target/release/isolation-bot", "--strategy", "greedy", "--port", "{port}"]
+
+[[team]]
+id = "eq01"
+cmd = ["java", "-jar", "jars/Client-eq01.jar"]
+
+[[team]]
+id = "eq02"
+cmd = ["java", "-jar", "jars/Client-eq02.jar"]

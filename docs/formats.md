@@ -1,0 +1,156 @@
+# Ladder Isolation : contrat de l'arbitre et format des parties
+
+Le ladder dépend de deux interfaces. La première permet de remplacer notre arbitre (`isolation-referee`) par une autre implémentation, par exemple la CLI C++ du serveur officiel. La seconde est le seul fichier que lit la page web. Les deux sont en version 1.
+
+```mermaid
+flowchart LR
+    ladder[isolation-ladder]
+    referee["arbitre<br/>(isolation-referee ou autre)"]
+    red[client rouge]
+    black[client noir]
+    jsonl[(data/games.jsonl)]
+    web[web/index.html]
+
+    ladder -- lance --> referee
+    ladder -- lance --> red
+    ladder -- lance --> black
+    red <-- TCP --> referee
+    black <-- TCP --> referee
+    referee -- "1 objet JSON (stdout)" --> ladder
+    ladder -- ajoute une ligne --> jsonl
+    jsonl -- fetch --> web
+```
+
+## Contrat de l'arbitre
+
+### Ligne de commande
+
+Le ladder lance l'arbitre à partir d'un gabarit configurable (`referee` dans `ladder.toml`) où `{port}`, `{time_ms}` et `{opening}` sont remplacés. Les noms d'options sont libres, seul le comportement compte.
+
+| Paramètre | Sens |
+| --- | --- |
+| `port` | Port TCP d'écoute. Les parties se jouent l'une après l'autre sur ce port. |
+| `time_ms` | Temps par coup, annoncé aux clients et appliqué (500 ms au ladder, 5000 ms au tournoi). |
+| `opening` | Optionnel. Demi-coups imposés avant de donner la main aux clients, séparés par des virgules (`G1-G3-F9,F12-F10-G7`). Toujours en nombre pair, pour que le rouge joue le premier coup client. |
+
+### Déroulement
+
+1. L'arbitre écoute sur le port et écrit `LISTENING <port>` sur sa sortie d'erreur.
+2. La première connexion est le rouge, la seconde le noir. Après chacune, il écrit `CONNECTED red` puis `CONNECTED black` sur sa sortie d'erreur. Le ladder attend `CONNECTED red` avant de lancer le noir : sans ça, une JVM qui démarre plus lentement inverserait les couleurs.
+3. Il applique le protocole du serveur officiel (voir plus bas).
+4. À la fin, il écrit un seul objet JSON, sur une ligne, sur sa sortie standard, et sort avec le code 0 quel que soit le gagnant. Le code 3 signifie qu'un joueur ne s'est pas connecté ; aucune partie n'est alors enregistrée.
+
+```mermaid
+sequenceDiagram
+    participant L as ladder
+    participant A as arbitre
+    participant R as client rouge
+    participant N as client noir
+
+    L->>A: lance (port, time_ms, opening)
+    A-->>L: stderr : LISTENING <port>
+    L->>R: lance
+    R->>A: connexion
+    A->>R: 0 2 12 12 T 0
+    A-->>L: stderr : CONNECTED red
+    L->>N: lance
+    N->>A: connexion
+    A->>N: 0 2 12 12 T 1
+    A->>N: 2 <plateau>
+    A-->>L: stderr : CONNECTED black
+    A->>R: 1 <plateau>
+    R->>A: G1-E3-C12
+    A->>N: 3 G1 - E3 - C12
+    N->>A: F12-F9-G2
+    Note over A,N: ... jusqu'à ce qu'un joueur n'ait plus de coup
+    A->>R: 5 WIN <dernier coup>
+    A->>N: 5 LOSS <dernier coup>
+    A-->>L: stdout : objet JSON, code 0
+```
+
+Si une autre implémentation n'écrit pas `LISTENING` ni `CONNECTED red`, il suffit de laisser les marqueurs vides dans `ladder.toml` : le ladder attend alors `startup_ms` à la place.
+
+### Objet résultat
+
+Écrit sur une seule ligne (présenté ici sur plusieurs) :
+
+```json
+{
+  "v": 1,
+  "time_ms": 500,
+  "opening": ["G1-H2-I12", "F12-F11-E2"],
+  "moves": ["G1-F2-C12", "F12-E11-C5"],
+  "winner": "black",
+  "reason": "no_moves",
+  "invalid": { "red": 0, "black": 2 },
+  "duration_ms": 15100
+}
+```
+
+| Champ | Type | Sens |
+| --- | --- | --- |
+| `v` | entier | Version du format : 1. |
+| `time_ms` | entier | Temps par coup appliqué. |
+| `opening` | liste | Demi-coups imposés (peut être vide). |
+| `moves` | liste | Coups des clients au format `G1-E3-C12` (départ, arrivée, case détruite). |
+| `winner` | `"red"` ou `"black"` | Il n'y a pas de nulle en Isolation. |
+| `reason` | chaîne | `no_moves` : le perdant n'avait plus de coup. `timeout` : temps dépassé. `disconnect` : connexion perdue. `protocol` : trop de coups invalides, si une limite est fixée. |
+| `invalid` | objet | Nombre de coups refusés (`4`) par couleur. |
+| `duration_ms` | entier | Durée de la partie. |
+
+Avant d'enregistrer un résultat, le ladder rejoue la partie avec notre moteur ; un coup illégal ou un gagnant incohérent la fait rejeter.
+
+## Fichier des parties (`data/games.jsonl`)
+
+Une ligne JSON par partie terminée, en ajout seul. Chaque ligne reprend l'objet résultat avec les champs ajoutés par le ladder :
+
+```json
+{
+  "id": "20261024T142103.512Z-eq07-eq12",
+  "session": "ladder-2026-11",
+  "ts": "2026-10-24T14:21:03.512Z",
+  "red": { "team": "eq07", "build": "3fa9c2d1e0b4a7f6" },
+  "black": { "team": "eq12" },
+  "v": 1,
+  "time_ms": 500,
+  "opening": ["G1-H2-I12", "F12-F11-E2"],
+  "moves": ["G1-F2-C12", "F12-E11-C5"],
+  "winner": "red",
+  "reason": "no_moves",
+  "invalid": { "red": 0, "black": 0 },
+  "duration_ms": 15100
+}
+```
+
+- `build` : les 16 premiers caractères hexadécimaux du sha256 du jar. Un nouveau hash correspond à une nouvelle soumission : le rating est conservé mais repasse en K provisoire.
+- `anchor` (absent par défaut) : joueur de référence dont le rating reste à 1500. Sans ancre, le classement est relatif entre les équipes.
+- Chaque ligne part en une seule écriture suivie d'un flush. Un lecteur peut donc tomber sur une dernière ligne incomplète ; la page et `isolation-check` l'ignorent, comme les versions inconnues.
+
+## Protocole des clients
+
+Le serveur envoie une commande par ligne :
+
+| Message | Sens |
+| --- | --- |
+| `0 2 12 12 T C` | Nouvelle partie : version 2, lignes, colonnes, temps par coup (ms), couleur (0 rouge, 1 noir). |
+| `2 <144 entiers>` | Envoyé au noir dès sa connexion : plateau initial. |
+| `1 <144 entiers>` | Envoyé au rouge : plateau initial, et première demande de coup. |
+| `3 G1 - E3 - C12` | Demande de coup, avec le dernier coup adverse. |
+| `4` | Coup refusé. Le chrono continue, il faut renvoyer un coup. |
+| `5 WIN\|LOSS <coup>` | Fin de partie, avec le coup final. |
+| `5 TIMEOUT` | Fin sur dépassement de temps, envoyé aux deux joueurs. |
+
+Valeurs du plateau : 0 vide, 1 détruite, 3 pion noir, 5 pion rouge, la ligne 12 d'abord, colonnes A à L. Le client répond un coup par ligne, au format `G1-E3-C12`, `G1 E3 C12` ou `G1E3C12`.
+
+## Mise en route
+
+```sh
+cargo build --release
+cp ladder.example.toml ladder.toml          # equipes, temps, session
+target/release/isolation-ladder ladder.toml # Ctrl+C pour arreter, relancer reprend la session
+target/release/isolation-check data/games.jsonl
+npx http-server . -p 8000                   # ou python3 -m http.server 8000
+# puis ouvrir http://localhost:8000/web/
+```
+
+La page lit `../data/games.jsonl` par défaut (une autre source se passe avec `web/?data=URL`) et se rafraîchit toutes les 15 secondes.

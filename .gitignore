@@ -10,3 +10,10 @@ super-linter.log
 
 # GitHub Actions leftovers
 github_conf
+
+# Rust
+target/
+
+# Donnees du ladder et config locale (chemins des jars)
+data/
+ladder.toml

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="fr">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Ladder Isolation</title>
+        <link rel="stylesheet" href="style.css" />
+        <script type="module" src="app.js"></script>
+    </head>
+    <body>
+        <header>
+            <h1>Ladder Isolation <span class="muted">LOG200</span></h1>
+            <div class="controls">
+                <label>
+                    Session
+                    <select id="session"></select>
+                </label>
+                <span id="status" class="muted"></span>
+            </div>
+        </header>
+
+        <main>
+            <section class="panel" aria-labelledby="ranking-title">
+                <h2 id="ranking-title">Classement</h2>
+                <table id="ranking">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Équipe</th>
+                            <th class="num">Elo</th>
+                            <th class="num">Parties</th>
+                            <th class="num">V-D</th>
+                            <th class="num">% V</th>
+                            <th>Dernière partie</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+                <p class="note">
+                    Elo relatif entre les équipes : 1500 au départ, K = 40 pendant les 20 premières
+                    parties de chaque soumission (marque <span class="badge prov">provisoire</span>),
+                    puis K = 20.
+                    <span id="anchor-note" hidden
+                        >Une <span class="badge anchor">ancre</span> garde un rating fixe de 1500.</span
+                    >
+                    Temps par coup du ladder : <span id="time-ms">?</span> ms (5000 ms au tournoi).
+                </p>
+            </section>
+
+            <section class="panel" aria-labelledby="games-title">
+                <h2 id="games-title">Parties récentes</h2>
+                <ul id="games"></ul>
+            </section>
+
+            <section class="panel replay" aria-labelledby="replay-title">
+                <h2 id="replay-title">Replay <span id="replay-info" class="muted"></span></h2>
+                <div id="board" class="board" aria-label="Plateau 12x12"></div>
+                <div class="replay-controls">
+                    <button id="first" title="Début">|&lt;</button>
+                    <button id="prev" title="Coup précédent">&lt;</button>
+                    <button id="play" title="Lecture">Lecture</button>
+                    <button id="next" title="Coup suivant">&gt;</button>
+                    <button id="last" title="Fin">&gt;|</button>
+                    <input id="step" type="range" min="0" max="0" value="0" aria-label="Coup" />
+                    <span id="step-label" class="muted"></span>
+                </div>
+            </section>
+        </main>
+    </body>
+</html>
