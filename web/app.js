@@ -37,6 +37,8 @@ const ENDINGS = {
 
 let lastText = null
 let games = []
+// Courbe de l'équipe recherchée : points[0] est le départ à START, puis une entrée d'historique par partie.
+let chart = { team: null, points: [], min: 0, max: 0, index: 0 }
 // `pinned` : la personne a choisi une partie ; sinon le replay suit la dernière jouée.
 let replay = { game: null, steps: [], index: 0, timer: null, pinned: false }
 
@@ -191,19 +193,68 @@ function renderChart(ratings) {
     const found = query() ? ratings.filter((r) => matches(r.team)) : []
     const r = found.find((r) => r.team.toLowerCase() === query()) ?? (found.length === 1 ? found[0] : null)
     $('elo-chart').hidden = !r
-    if (!r) return
-    const team = r.team
-    const values = [START, ...r.history.map((h) => h.rating)]
+    if (!r) {
+        chart.points = []
+        return
+    }
+    const byId = new Map(games.map((g) => [g.id, g]))
+    const points = [{ rating: START }, ...r.history.map((h) => ({ ...h, game: byId.get(h.id) }))]
+    const values = points.map((p) => p.rating)
     const min = Math.min(...values)
     const max = Math.max(...values)
-    const now = Math.round(values.at(-1))
+    chart = { team: r.team, points, min, max, index: 0 }
+
     const svg = $('elo-line')
-    const line = document.createElementNS(svg.namespaceURI, 'polyline')
-    line.setAttribute('points', values.map((v, i) => `${i},${max - v}`).join(' '))
-    svg.setAttribute('viewBox', `0 0 ${values.length - 1} ${max - min || 1}`)
-    svg.setAttribute('aria-label', `Elo de ${team} : de ${START} à ${now} sur ${r.history.length} parties`)
-    svg.replaceChildren(line)
-    $('elo-caption').textContent = `${team} : ${now} Elo, entre ${Math.round(min)} et ${Math.round(max)}`
+    const bottom = max - min || 1
+    const line = values.map((v, i) => `${i},${max - v}`).join(' ')
+    const area = document.createElementNS(svg.namespaceURI, 'polygon')
+    area.setAttribute('points', `0,${bottom} ${line} ${values.length - 1},${bottom}`)
+    const stroke = document.createElementNS(svg.namespaceURI, 'polyline')
+    stroke.setAttribute('points', line)
+    svg.setAttribute('viewBox', `0 0 ${values.length - 1} ${bottom}`)
+    svg.replaceChildren(area, stroke)
+    $('elo-plot').setAttribute('aria-valuemax', String(values.length - 1))
+    placeCursor(replayPoint())
+}
+
+// Point de la partie affichée dans le replay, sinon le dernier.
+function replayPoint() {
+    const i = chart.points.findIndex((p) => p.id && p.id === replay.game?.id)
+    return i > 0 ? i : chart.points.length - 1
+}
+
+// Curseur et lecture au point i, comme un graphe de portefeuille : Elo, delta, résultat, date.
+function placeCursor(i) {
+    const { points, min, max, team } = chart
+    if (!points.length) return
+    chart.index = Math.max(0, Math.min(points.length - 1, i))
+    const p = points[chart.index]
+    const x = `${(100 * chart.index) / (points.length - 1)}%`
+    $('elo-cursor').style.left = x
+    Object.assign($('elo-dot').style, { left: x, top: `${(100 * (max - p.rating)) / (max - min || 1)}%` })
+
+    const parts = [el('strong', {}, `${Math.round(p.rating)} Elo`)]
+    let text = `${Math.round(p.rating)} Elo`
+    if (p.game) {
+        const color = p.game.red.team === team ? 'red' : 'black'
+        const opponent = p.game[color === 'red' ? 'black' : 'red'].team
+        const d = Math.round(p.delta)
+        const context = ` ${p.game.winner === color ? 'victoire' : 'défaite'} contre ${opponent}, ${fullFormat.format(new Date(p.ts))}`
+        if (d) parts.push(' ', el('span', { class: `delta ${d > 0 ? 'up' : 'down'}` }, signed(d)))
+        parts.push(el('span', {}, context))
+        text += `${d ? ` (${signed(d)})` : ''},${context}`
+    } else {
+        parts.push(el('span', {}, ` départ de ${team}`))
+        text += `, départ de ${team}`
+    }
+    $('elo-caption').replaceChildren(...parts)
+    $('elo-plot').setAttribute('aria-valuenow', String(chart.index))
+    $('elo-plot').setAttribute('aria-valuetext', text)
+}
+
+function openPoint(i) {
+    const g = chart.points[i]?.game
+    if (g) showGame(g, true)
 }
 
 const signed = (n) => `${n > 0 ? '+' : '−'}${Math.abs(n)}`
@@ -271,6 +322,7 @@ function showGame(g, pinned = replay.pinned) {
         if (button.dataset.id === g.id) button.setAttribute('aria-current', 'true')
         else button.removeAttribute('aria-current')
     }
+    placeCursor(replayPoint())
     drawStep()
 }
 
@@ -379,6 +431,23 @@ for (const [id, event] of [
     })
 }
 $('share').addEventListener('click', share)
+
+const plot = $('elo-plot')
+const pointAt = (e) => {
+    const box = plot.getBoundingClientRect()
+    return Math.round(((e.clientX - box.left) / box.width) * (chart.points.length - 1))
+}
+for (const type of ['pointermove', 'pointerdown']) plot.addEventListener(type, (e) => placeCursor(pointAt(e)))
+plot.addEventListener('pointerleave', () => placeCursor(replayPoint()))
+// Le point affiché, pas la position du clic : `click` arrondit clientX et peut tomber sur le voisin.
+plot.addEventListener('click', () => openPoint(chart.index))
+plot.addEventListener('keydown', (e) => {
+    const moves = { ArrowLeft: chart.index - 1, ArrowRight: chart.index + 1, Home: 0, End: chart.points.length - 1 }
+    if (e.key in moves) placeCursor(moves[e.key])
+    else if (e.key === 'Enter' || e.key === ' ') openPoint(chart.index)
+    else return
+    e.preventDefault()
+})
 $('first').addEventListener('click', () => browse(0))
 $('prev').addEventListener('click', () => browse(replay.index - 1))
 $('next').addEventListener('click', () => browse(replay.index + 1))
@@ -386,7 +455,7 @@ $('last').addEventListener('click', () => browse(replay.steps.length - 1))
 $('play').addEventListener('click', togglePlayback)
 $('step').addEventListener('input', (e) => browse(+e.target.value))
 document.addEventListener('keydown', (e) => {
-    if (e.target.closest('input, select, textarea, [contenteditable]')) return
+    if (e.target.closest('input, select, textarea, [contenteditable], [role="slider"]')) return
     if (e.key === 'ArrowLeft') browse(replay.index - 1)
     if (e.key === 'ArrowRight') browse(replay.index + 1)
 })

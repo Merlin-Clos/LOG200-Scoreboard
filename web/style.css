@@ -803,14 +803,40 @@ input[type='range'] {
     margin: 0 0 10px;
 }
 
-.elo-chart svg {
+.elo-caption {
+    margin-bottom: 6px;
+    color: var(--muted);
+    font-size: 0.8125rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.elo-caption strong {
+    color: var(--ink);
+    font-size: 0.9375rem;
+}
+
+/* Le SVG s'étire ; curseur et point sont en HTML pour garder leur forme. */
+.elo-plot {
+    position: relative;
+    height: 72px;
+    cursor: crosshair;
+    touch-action: pan-y;
+}
+
+.elo-plot svg {
     display: block;
     width: 100%;
-    height: 48px;
+    height: 100%;
     overflow: visible;
 }
 
-.elo-chart polyline {
+.elo-plot polygon {
+    fill: color-mix(in srgb, var(--red) 14%, transparent);
+}
+
+.elo-plot polyline {
     fill: none;
     stroke: var(--red);
     stroke-width: 2;
@@ -818,10 +844,24 @@ input[type='range'] {
     vector-effect: non-scaling-stroke;
 }
 
-.elo-chart figcaption {
-    margin-top: 4px;
-    color: var(--muted);
-    font-size: 0.8125rem;
+.elo-cursor {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--muted);
+    pointer-events: none;
+}
+
+.elo-dot {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    margin: -5px 0 0 -5px;
+    border-radius: 50%;
+    background: var(--red);
+    box-shadow: 0 0 0 2px var(--surface);
+    pointer-events: none;
 }
 
 .side.winner {
