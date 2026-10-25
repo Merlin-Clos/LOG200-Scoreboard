@@ -1,0 +1,61 @@
+---
+name: Pages
+
+# Publie web/ sur GitHub Pages a chaque push sur main qui touche la page : pas de tag, pas de
+# redemarrage du ladder. La page lit les donnees et l'API sur le serveur de la variable de depot
+# SCOREBOARD_URL (ex. https://ladder.example.com, sans / final).
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'web/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy page
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Test
+        run: node --test web/elo.test.mjs
+
+      - name: Point the page at the server
+        env:
+          SERVER: ${{ vars.SCOREBOARD_URL }}
+        run: |
+          if [[ ! "$SERVER" =~ ^https://[^/\"]+$ ]]; then
+            echo "::error::Variable de depot SCOREBOARD_URL absente ou invalide (attendu : https://domaine, sans / final)"
+            exit 1
+          fi
+          sed -i "s|<meta name=\"scoreboard-server\" content=\"\"|<meta name=\"scoreboard-server\" content=\"$SERVER\"|" web/index.html
+          grep -q "content=\"$SERVER\"" web/index.html
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload page
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

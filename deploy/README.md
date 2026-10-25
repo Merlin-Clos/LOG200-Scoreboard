@@ -43,3 +43,13 @@ Les journaux des joueurs vont dans `data/logs/`, les jars et les tokens dans `ja
 ## Nom de domaine et HTTPS
 
 Hors du périmètre de ce compose : placer le reverse proxy de votre choix (Caddy, Nginx…) devant le port 8080.
+
+## Page sur GitHub Pages (optionnel)
+
+La page reste servie par ce compose, mais elle peut aussi être publiée sur GitHub Pages : une modification de `web/` est alors en ligne à chaque push sur `main`, sans tag ni redémarrage du ladder. Elle lit toujours les parties et l'API sur ce serveur, qui doit donc être en HTTPS (section précédente).
+
+1. Dans le dépôt GitHub, Settings > Pages : source « GitHub Actions ».
+2. Settings > Secrets and variables > Actions > Variables : créer `SCOREBOARD_URL` avec l'adresse du serveur, par exemple `https://ladder.example.com` (sans `/` final).
+3. Lancer le workflow `Pages` (onglet Actions, « Run workflow ») ou pousser une modification de `web/`.
+
+Le serveur accepte déjà les requêtes venant d'un autre site (en-têtes CORS du `Caddyfile`) : rien à changer de ce côté, hormis être à jour.

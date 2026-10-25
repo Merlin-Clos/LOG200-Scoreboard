@@ -1,12 +1,14 @@
 // Page du ladder : lit le JSONL, calcule le classement, affiche les parties et le replay.
-// Source des données : ?data=URL, sinon ../data/games.jsonl (serveur statique lancé à la racine).
+// Serveur : la balise meta scoreboard-server (posée par le workflow GitHub Pages), sinon le site qui
+// sert la page. Données : ?data=URL, sinon <serveur>/data/games.jsonl.
 // ?session=, ?team= et ?game= suivent les choix de la page : l'adresse se partage telle quelle.
 
 import { computeRatings, parseJsonl, sessions, START } from './elo.js'
 import { BLACK, DESTROYED, positions, RED, SIZE, squareName } from './replay.js'
 
 const params = new URLSearchParams(location.search)
-const DATA_URL = params.get('data') ?? '../data/games.jsonl'
+const SERVER = document.querySelector('meta[name="scoreboard-server"]')?.content || '..'
+const DATA_URL = params.get('data') ?? `${SERVER}/data/games.jsonl`
 const REFRESH_MS = 15000
 const RECENT_GAMES = 50
 const PLAY_MS = 500
@@ -383,7 +385,7 @@ document.addEventListener('keydown', (e) => {
 })
 
 // Le formulaire n'apparaît que si le service de soumission répond (absent en hébergement statique).
-const API = '../api'
+const API = `${SERVER}/api`
 
 async function setupSubmit() {
     try {
