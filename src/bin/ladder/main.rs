@@ -139,6 +139,7 @@ fn run(path: &PathBuf, rounds: Option<u64>) -> anyhow::Result<()> {
             }
         }
         scheduler.record(&a.id, &b.id, 2);
+        thread::sleep(Duration::from_secs(cfg.pause_s));
     }
     Ok(())
 }

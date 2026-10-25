@@ -45,6 +45,9 @@ pub struct Config {
     pub cleanup: CommandTemplate,
     /// Par défaut : 144 coups au temps max, plus 2 minutes.
     pub game_timeout_s: Option<u64>,
+    /// Pause entre deux paires ; 0 les enchaîne.
+    #[serde(default)]
+    pub pause_s: u64,
     /// Exporté en variables d'environnement `SANDBOX_<CLÉ>` pour l'arbitre, les joueurs et `cleanup`.
     #[serde(default)]
     pub sandbox: BTreeMap<String, toml::Value>,

@@ -24,6 +24,9 @@ startup_ms = 1000
 # Duree max d'une partie (par defaut 144 coups au temps max, plus 2 minutes).
 # game_timeout_s = 300
 
+# Pause entre deux paires, en secondes. 0 (par defaut) : les parties s'enchainent.
+# pause_s = 60
+
 # Lancee apres chaque partie, meme en echec, avec l'id de la partie dans {game}. Aussi lancee au
 # demarrage avec {game} vide, pour nettoyer apres un Ctrl+C.
 cleanup = ["sandbox/cleanup.sh", "{game}"]
