@@ -22,6 +22,10 @@
                 <span>Session</span>
                 <select id="session"></select>
             </label>
+            <label class="session">
+                <span>Équipe</span>
+                <select id="team"></select>
+            </label>
             <p class="status" role="status">
                 <span id="live" class="live" aria-hidden="true"></span>
                 <span id="status">Chargement des parties…</span>
@@ -134,6 +138,10 @@
 
         <section class="panel games" aria-labelledby="games-title">
             <h2 id="games-title">Parties récentes</h2>
+            <figure id="elo-chart" class="elo-chart" hidden>
+                <svg id="elo-line" role="img" preserveAspectRatio="none"></svg>
+                <figcaption id="elo-caption"></figcaption>
+            </figure>
             <ol id="games" class="scroll games-list" tabindex="-1"></ol>
         </section>
     </main>

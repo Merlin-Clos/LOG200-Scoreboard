@@ -1,14 +1,16 @@
 // Page du ladder : lit le JSONL, calcule le classement, affiche les parties et le replay.
 // Source des données : ?data=URL, sinon ../data/games.jsonl (serveur statique lancé à la racine).
 
-import { computeRatings, parseJsonl, sessions } from './elo.js'
+import { computeRatings, parseJsonl, sessions, START } from './elo.js'
 import { BLACK, DESTROYED, positions, RED, SIZE, squareName } from './replay.js'
 
-const DATA_URL = new URLSearchParams(location.search).get('data') ?? '../data/games.jsonl'
+const params = new URLSearchParams(location.search)
+const DATA_URL = params.get('data') ?? '../data/games.jsonl'
 const REFRESH_MS = 15000
 const RECENT_GAMES = 50
 const PLAY_MS = 500
 const GLOBAL = ''
+const TEAM = params.get('team') ?? GLOBAL
 
 const $ = (id) => document.getElementById(id)
 
@@ -73,7 +75,7 @@ async function refresh() {
             const first = lastText === null
             lastText = text
             games = parseJsonl(text).games
-            renderSessions()
+            renderSessions(first)
             render()
             if (!first) pulse()
         } else {
@@ -102,26 +104,32 @@ function pulse() {
     live.classList.add('pulse')
 }
 
-function renderSessions() {
-    const select = $('session')
-    const current = select.value
-    select.replaceChildren(
-        el('option', { value: GLOBAL }, 'Toutes'),
-        ...sessions(games).map((s) => el('option', { value: s }, s))
-    )
-    select.value = [...select.options].some((o) => o.value === current) ? current : GLOBAL
+function fillSelect(select, values, wanted = select.value) {
+    select.replaceChildren(el('option', { value: GLOBAL }, 'Toutes'), ...values.map((v) => el('option', { value: v }, v)))
+    select.value = values.includes(wanted) ? wanted : GLOBAL
+}
+
+function renderSessions(first) {
+    fillSelect($('session'), sessions(games))
+    const teams = [...new Set(games.flatMap((g) => [g.red.team, g.black.team]))].sort()
+    fillSelect($('team'), teams, first ? TEAM : $('team').value)
 }
 
 function selectedGames() {
     const s = $('session').value
-    return s === GLOBAL ? games : games.filter((g) => g.session === s)
+    const t = $('team').value
+    return games.filter(
+        (g) => (s === GLOBAL || g.session === s) && (t === GLOBAL || g.red.team === t || g.black.team === t)
+    )
 }
 
 function render() {
     const session = $('session').value || null
     const list = selectedGames()
-    renderRanking(computeRatings(games, session))
-    renderGames(list)
+    const ratings = computeRatings(games, session)
+    renderRanking(ratings)
+    renderChart(ratings)
+    renderGames(list, new Map(ratings.flatMap((r) => r.history.map((h) => [`${h.id}|${r.team}`, h]))))
 
     const times = [...new Set(list.map((g) => g.time_ms))]
     $('time-ms').textContent = times.join(', ') || '?'
@@ -162,24 +170,55 @@ function renderRanking(ratings) {
         )
 }
 
-function renderGames(list) {
+function renderChart(ratings) {
+    const team = $('team').value
+    const r = ratings.find((r) => r.team === team)
+    $('elo-chart').hidden = !r
+    if (!r) return
+    const values = [START, ...r.history.map((h) => h.rating)]
+    const min = Math.min(...values)
+    const max = Math.max(...values)
+    const now = Math.round(values.at(-1))
+    const svg = $('elo-line')
+    const line = document.createElementNS(svg.namespaceURI, 'polyline')
+    line.setAttribute('points', values.map((v, i) => `${i},${max - v}`).join(' '))
+    svg.setAttribute('viewBox', `0 0 ${values.length - 1} ${max - min || 1}`)
+    svg.setAttribute('aria-label', `Elo de ${team} : de ${START} à ${now} sur ${r.history.length} parties`)
+    svg.replaceChildren(line)
+    $('elo-caption').textContent = `${team} : ${now} Elo, entre ${Math.round(min)} et ${Math.round(max)}`
+}
+
+const signed = (n) => `${n > 0 ? '+' : '−'}${Math.abs(n)}`
+
+// `deltas` : clé `${id}|${équipe}` vers l'entrée d'historique Elo de cette partie.
+function renderGames(list, deltas) {
     const items = list
         .slice(-RECENT_GAMES)
         .reverse()
         .map((g) => {
-            const side = (color) =>
-                el(
+            const entry = (color) => deltas.get(`${g.id}|${g[color].team}`)
+            const change = (color) => Math.round(entry(color)?.delta ?? 0)
+            const side = (color) => {
+                const node = el(
                     'span',
                     { class: `side ${color}${g.winner === color ? ' winner' : ''}` },
                     el('span', {}, g[color].team)
                 )
+                const d = change(color)
+                if (d) {
+                    const title = `Elo après la partie : ${Math.round(entry(color).rating)}`
+                    node.append(el('span', { class: `delta ${d > 0 ? 'up' : 'down'}`, title }, signed(d)))
+                }
+                return node
+            }
+            const who = (color, name) => `${g[color].team} (${name}${change(color) ? `, ${signed(change(color))}` : ''})`
             const button = el(
                 'button',
                 {
                     type: 'button',
                     class: 'game',
                     'data-id': g.id,
-                    'aria-label': `${g.red.team} (rouge) contre ${g.black.team} (noir), ${g[g.winner].team} gagne`,
+                    'aria-label': `${who('red', 'rouge')} contre ${who('black', 'noir')}, ${g[g.winner].team} gagne`,
                 },
                 el('time', { datetime: g.ts, title: fullFormat.format(new Date(g.ts)) }, shortWhen(g.ts)),
                 side('red'),
@@ -296,10 +335,12 @@ function browse(i) {
     goTo(i)
 }
 
-$('session').addEventListener('change', () => {
-    replay.pinned = false
-    render()
-})
+for (const id of ['session', 'team']) {
+    $(id).addEventListener('change', () => {
+        replay.pinned = false
+        render()
+    })
+}
 $('first').addEventListener('click', () => browse(0))
 $('prev').addEventListener('click', () => browse(replay.index - 1))
 $('next').addEventListener('click', () => browse(replay.index + 1))

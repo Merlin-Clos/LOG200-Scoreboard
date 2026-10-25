@@ -33,6 +33,11 @@ test('first game moves both ratings by K/2', () => {
     assert.equal(a.wins, 1)
     assert.equal(b.losses, 1)
     assert.ok(a.provisional)
+    assert.deepEqual(
+        [a.history[0].delta, a.history[0].rating, b.history[0].delta],
+        [20, START + 20, -20]
+    )
+    assert.equal(a.history[0].id, b.history[0].id)
 })
 
 test('anchor rating never moves', () => {
@@ -44,6 +49,7 @@ test('anchor rating never moves', () => {
     assert.equal(ref.rating, START)
     assert.equal(ref.provisional, false)
     assert.equal(ref.games, 2)
+    assert.ok(ref.history.every((h) => h.delta === 0))
 })
 
 test('K drops after the provisional period and resets on a new build', () => {

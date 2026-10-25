@@ -71,13 +71,14 @@ export function computeRatings(games, session = null) {
         ]
         for (const [s, diff] of deltas) {
             const k = s.gamesOnBuild < PROVISIONAL_GAMES ? K_PROVISIONAL : K_STABLE
-            if (!s.anchor) s.rating += k * diff
+            const delta = s.anchor ? 0 : k * diff
+            s.rating += delta
             s.games++
             s.gamesOnBuild++
             if (diff > 0) s.wins++
             else s.losses++
             s.last = g.ts
-            s.history.push({ ts: g.ts, rating: s.rating })
+            s.history.push({ id: g.id, ts: g.ts, rating: s.rating, delta })
         }
     }
     return [...stats.values()]

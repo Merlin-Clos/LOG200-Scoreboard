@@ -751,6 +751,46 @@ input[type='range'] {
     box-shadow: 0 0 0 1.5px var(--pawn-rim);
 }
 
+.side .delta {
+    flex: none;
+    overflow: visible;
+    font-size: 0.8125rem;
+    font-weight: 400;
+}
+
+.delta.up {
+    color: var(--ok);
+}
+
+.delta.down {
+    color: var(--red);
+}
+
+.elo-chart {
+    margin: 0 0 10px;
+}
+
+.elo-chart svg {
+    display: block;
+    width: 100%;
+    height: 48px;
+    overflow: visible;
+}
+
+.elo-chart polyline {
+    fill: none;
+    stroke: var(--red);
+    stroke-width: 2;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.elo-chart figcaption {
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 0.8125rem;
+}
+
 .side.winner {
     font-weight: 700;
 }
