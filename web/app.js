@@ -238,7 +238,7 @@ function placeCursor(i) {
     if (p.game) {
         const color = p.game.red.team === team ? 'red' : 'black'
         const opponent = p.game[color === 'red' ? 'black' : 'red'].team
-        const d = Math.round(p.delta)
+        const d = roundDelta(p.delta)
         const context = ` ${p.game.winner === color ? 'victoire' : 'défaite'} contre ${opponent}, ${fullFormat.format(new Date(p.ts))}`
         if (d) parts.push(' ', el('span', { class: `delta ${d > 0 ? 'up' : 'down'}` }, signed(d)))
         parts.push(el('span', {}, context))
@@ -257,7 +257,8 @@ function openPoint(i) {
     if (g) showGame(g, true)
 }
 
-const signed = (n) => `${n > 0 ? '+' : '−'}${Math.abs(n)}`
+const signed = (n) => `${n > 0 ? '+' : '−'}${Math.abs(n).toLocaleString('fr-CA')}`
+const roundDelta = (d) => Math.round(d) || Math.round(d * 10) / 10
 
 // `deltas` : clé `${id}|${équipe}` vers l'entrée d'historique Elo de cette partie.
 function renderGames(list, deltas) {
@@ -266,7 +267,7 @@ function renderGames(list, deltas) {
         .reverse()
         .map((g) => {
             const entry = (color) => deltas.get(`${g.id}|${g[color].team}`)
-            const change = (color) => Math.round(entry(color)?.delta ?? 0)
+            const change = (color) => roundDelta(entry(color)?.delta ?? 0)
             const side = (color) => {
                 const node = el(
                     'span',
