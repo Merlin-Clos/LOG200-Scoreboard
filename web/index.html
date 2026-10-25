@@ -24,10 +24,6 @@
                 <span>Session</span>
                 <select id="session"></select>
             </label>
-            <label class="session">
-                <span>Équipe</span>
-                <select id="team"></select>
-            </label>
             <p class="status" role="status">
                 <span id="live" class="live" aria-hidden="true"></span>
                 <span id="status">Chargement des parties…</span>
@@ -140,7 +136,12 @@
         </section>
 
         <section class="panel games" aria-labelledby="games-title">
-            <h2 id="games-title">Parties récentes</h2>
+            <div class="games-head">
+                <h2 id="games-title">Parties récentes</h2>
+                <input id="team" class="search" type="search" list="teams" placeholder="Rechercher une équipe"
+                    aria-label="Rechercher une équipe" autocomplete="off" spellcheck="false" />
+                <datalist id="teams"></datalist>
+            </div>
             <figure id="elo-chart" class="elo-chart" hidden>
                 <svg id="elo-line" role="img" preserveAspectRatio="none"></svg>
                 <figcaption id="elo-caption"></figcaption>

@@ -780,6 +780,25 @@ input[type='range'] {
     color: var(--red);
 }
 
+.games-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px 12px;
+    margin-bottom: 10px;
+}
+
+.search {
+    flex: 0 1 14rem;
+    min-width: 0;
+    height: 2rem;
+    padding: 0 10px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+}
+
 .elo-chart {
     margin: 0 0 10px;
 }

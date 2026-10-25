@@ -119,7 +119,8 @@ function fillSelect(select, values, wanted = select.value) {
 function renderSessions(first) {
     fillSelect($('session'), sessions(games), first ? SESSION : $('session').value)
     const teams = [...new Set(games.flatMap((g) => [g.red.team, g.black.team]))].sort()
-    fillSelect($('team'), teams, first ? TEAM : $('team').value)
+    $('teams').replaceChildren(...teams.map((t) => el('option', { value: t })))
+    if (first) $('team').value = TEAM
 }
 
 function setParam(key, value) {
@@ -129,12 +130,13 @@ function setParam(key, value) {
     history.replaceState(null, '', url)
 }
 
+// Recherche d'équipe : sous-chaîne, sans tenir compte de la casse.
+const query = () => $('team').value.trim().toLowerCase()
+const matches = (team) => team.toLowerCase().includes(query())
+
 function selectedGames() {
     const s = $('session').value
-    const t = $('team').value
-    return games.filter(
-        (g) => (s === GLOBAL || g.session === s) && (t === GLOBAL || g.red.team === t || g.black.team === t)
-    )
+    return games.filter((g) => (s === GLOBAL || g.session === s) && (matches(g.red.team) || matches(g.black.team)))
 }
 
 function render() {
@@ -185,10 +187,12 @@ function renderRanking(ratings) {
 }
 
 function renderChart(ratings) {
-    const team = $('team').value
-    const r = ratings.find((r) => r.team === team)
+    // Courbe pour une seule équipe : nom exact, sinon seule équipe qui correspond à la recherche.
+    const found = query() ? ratings.filter((r) => matches(r.team)) : []
+    const r = found.find((r) => r.team.toLowerCase() === query()) ?? (found.length === 1 ? found[0] : null)
     $('elo-chart').hidden = !r
     if (!r) return
+    const team = r.team
     const values = [START, ...r.history.map((h) => h.rating)]
     const min = Math.min(...values)
     const max = Math.max(...values)
@@ -364,9 +368,12 @@ async function share() {
     setTimeout(() => ($('share').textContent = 'Copier le lien'), 2000)
 }
 
-for (const id of ['session', 'team']) {
-    $(id).addEventListener('change', () => {
-        setParam(id, $(id).value)
+for (const [id, event] of [
+    ['session', 'change'],
+    ['team', 'input'],
+]) {
+    $(id).addEventListener(event, () => {
+        setParam(id, $(id).value.trim())
         replay.pinned = false
         render()
     })
