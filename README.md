@@ -4,6 +4,10 @@ Live leaderboard (Elo, game history, replays) for the Isolation lab of LOG200.
 
 ![Leaderboard page: Elo ranking, recent games and the replay of one game](docs/images/leaderboard.png)
 
+Pick a team to see only its games and its Elo over time. The address follows the choices (`?team=eq08`, `?game=<id>`), so a filtered view or a single game can be shared as a link ("Copier le lien" above the replay).
+
+![Leaderboard filtered on one team: Elo curve above its recent games, and a shared game in the replay](docs/images/leaderboard-team.png)
+
 Each team submits its jar; the ladder makes the teams play each other around the clock and the page shows the result:
 
 ```mermaid

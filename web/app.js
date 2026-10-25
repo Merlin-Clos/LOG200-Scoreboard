@@ -1,5 +1,6 @@
 // Page du ladder : lit le JSONL, calcule le classement, affiche les parties et le replay.
 // Source des données : ?data=URL, sinon ../data/games.jsonl (serveur statique lancé à la racine).
+// ?session=, ?team= et ?game= suivent les choix de la page : l'adresse se partage telle quelle.
 
 import { computeRatings, parseJsonl, sessions, START } from './elo.js'
 import { BLACK, DESTROYED, positions, RED, SIZE, squareName } from './replay.js'
@@ -10,7 +11,9 @@ const REFRESH_MS = 15000
 const RECENT_GAMES = 50
 const PLAY_MS = 500
 const GLOBAL = ''
+const SESSION = params.get('session') ?? GLOBAL
 const TEAM = params.get('team') ?? GLOBAL
+const GAME = params.get('game')
 
 const $ = (id) => document.getElementById(id)
 
@@ -76,6 +79,8 @@ async function refresh() {
             lastText = text
             games = parseJsonl(text).games
             renderSessions(first)
+            const linked = first && games.find((g) => g.id === GAME)
+            if (linked) showGame(linked, true)
             render()
             if (!first) pulse()
         } else {
@@ -110,9 +115,16 @@ function fillSelect(select, values, wanted = select.value) {
 }
 
 function renderSessions(first) {
-    fillSelect($('session'), sessions(games))
+    fillSelect($('session'), sessions(games), first ? SESSION : $('session').value)
     const teams = [...new Set(games.flatMap((g) => [g.red.team, g.black.team]))].sort()
     fillSelect($('team'), teams, first ? TEAM : $('team').value)
+}
+
+function setParam(key, value) {
+    const url = new URL(location.href)
+    if (value) url.searchParams.set(key, value)
+    else url.searchParams.delete(key)
+    history.replaceState(null, '', url)
 }
 
 function selectedGames() {
@@ -238,6 +250,7 @@ function showGame(g, pinned = replay.pinned) {
     stopPlayback()
     const steps = positions(g)
     replay = { game: g, steps, index: steps.length - 1, timer: null, pinned }
+    setParam('game', pinned ? g.id : null)
     $('step').max = String(steps.length - 1)
 
     const loser = g.winner === 'red' ? 'black' : 'red'
@@ -332,15 +345,31 @@ function togglePlayback() {
 // Parcourir une partie la fige : le replay ne saute plus vers la dernière jouée.
 function browse(i) {
     replay.pinned = true
+    setParam('game', replay.game?.id)
     goTo(i)
+}
+
+async function share() {
+    if (!replay.game) return
+    replay.pinned = true
+    setParam('game', replay.game.id)
+    try {
+        await navigator.clipboard.writeText(location.href)
+        $('share').textContent = 'Lien copié'
+    } catch {
+        $('share').textContent = "Copiez l'adresse de la page"
+    }
+    setTimeout(() => ($('share').textContent = 'Copier le lien'), 2000)
 }
 
 for (const id of ['session', 'team']) {
     $(id).addEventListener('change', () => {
+        setParam(id, $(id).value)
         replay.pinned = false
         render()
     })
 }
+$('share').addEventListener('click', share)
 $('first').addEventListener('click', () => browse(0))
 $('prev').addEventListener('click', () => browse(replay.index - 1))
 $('next').addEventListener('click', () => browse(replay.index + 1))
