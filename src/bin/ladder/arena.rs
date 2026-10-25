@@ -1,0 +1,273 @@
+//! Déroulé d'une partie : lancer l'arbitre (n'importe quel programme qui respecte le contrat),
+//! attendre qu'il écoute, lancer le rouge, attendre sa connexion, lancer le noir, lire le résultat.
+
+use std::fs::{self, File};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::path::Path;
+use std::process::{Child, ChildStdout, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Mutex, PoisonError};
+use std::thread;
+use std::time::Duration;
+
+use thiserror::Error;
+
+use isolation::board::{Color, Move};
+use isolation::notation;
+use isolation::record::{GameRecord, GameResult, Player, ValidationError, now_rfc3339};
+
+use crate::config::{Config, Team, Vars};
+use crate::digest::short_hash;
+use crate::journal::compact_timestamp;
+
+/// Au-delà, le journal d'un joueur est tronqué : un jar ne doit pas pouvoir remplir le disque.
+const LOG_CAP: usize = 1 << 20;
+const MARKER_TIMEOUT: Duration = Duration::from_secs(60);
+
+#[derive(Debug, Error)]
+pub enum GameError {
+    #[error("lancement de {who} : {error}")]
+    Spawn { who: String, error: io::Error },
+    #[error("arbitre : `{0}` jamais reçu")]
+    MarkerNeverSeen(String),
+    #[error("partie interrompue après {0:?}")]
+    Timeout(Duration),
+    #[error("attente de l'arbitre : {0}")]
+    Wait(io::Error),
+    #[error("arbitre terminé avec {0}")]
+    RefereeFailed(ExitStatus),
+    #[error("résultat illisible ({error}) : {json:?}")]
+    BadResult { json: String, error: serde_json::Error },
+    #[error("résultat incohérent : {0}")]
+    Inconsistent(#[from] ValidationError),
+}
+
+/// Joue les parties une par une, ladder et smoke tests confondus : pas de port ni de cœur partagé.
+pub struct Arena {
+    cfg: Config,
+    one_game: Mutex<()>,
+}
+
+impl Arena {
+    pub const fn new(cfg: Config) -> Self {
+        Self {
+            cfg,
+            one_game: Mutex::new(()),
+        }
+    }
+
+    pub const fn config(&self) -> &Config {
+        &self.cfg
+    }
+
+    /// Ramasse les restes d'un arrêt brutal : `cleanup` avec `{game}` vide.
+    pub fn sweep(&self) {
+        let vars = Vars {
+            cfg: &self.cfg,
+            opening: String::new(),
+            game: "",
+        };
+        drop(CleanupGuard::new(&vars));
+    }
+
+    pub fn play(&self, red: &Team, black: &Team, opening: &[Move]) -> Result<GameRecord, GameError> {
+        let _turn = self.one_game.lock().unwrap_or_else(PoisonError::into_inner);
+        let cfg = &self.cfg;
+        let ts = now_rfc3339();
+        let id = format!("{}-{}-{}", compact_timestamp(&ts), red.id, black.id);
+        let vars = Vars {
+            cfg,
+            opening: notation::join(opening),
+            game: &id,
+        };
+        // Déclaré avant les processus : détruit après eux.
+        let _cleanup = CleanupGuard::new(&vars);
+        let referee = RefereeProcess::spawn(&vars)?;
+
+        let startup = Duration::from_millis(cfg.startup_ms);
+        let spawn_player = |team: &Team, side: Color| {
+            let log = cfg.logs_dir().join(format!("{id}-{}.log", team.id));
+            vars.command(&team.cmd, Some(side))
+                .and_then(|command| spawn_logged(command, &log))
+                .map_err(|error| GameError::Spawn {
+                    who: team.id.clone(),
+                    error,
+                })
+        };
+        // Si l'arbitre se termine avant un marqueur, un joueur manque : son résultat est déjà rendu.
+        let mut players = Vec::with_capacity(2);
+        if referee.wait_for(&cfg.ready_marker, startup)? == Marker::Seen {
+            players.push(spawn_player(red, Color::Red)?);
+            if referee.wait_for(&cfg.red_connected_marker, startup)? == Marker::Seen {
+                players.push(spawn_player(black, Color::Black)?);
+            }
+        }
+        let result = referee.finish(cfg.game_timeout())?;
+        drop(players);
+
+        let entry = |team: &Team| Player {
+            team: team.id.clone(),
+            build: build_hash(team),
+            anchor: team.anchor,
+        };
+        Ok(GameRecord {
+            id,
+            session: cfg.session.clone(),
+            ts,
+            red: entry(red),
+            black: entry(black),
+            result,
+        })
+    }
+}
+
+fn build_hash(team: &Team) -> Option<String> {
+    fs::read(team.build_file()?).ok().map(|bytes| short_hash(&bytes))
+}
+
+#[derive(PartialEq, Eq)]
+enum Marker {
+    Seen,
+    RefereeExited,
+}
+
+struct RefereeProcess {
+    process: Reaper,
+    /// Lignes du stderr de l'arbitre, déjà relayées sur le nôtre.
+    lines: Receiver<String>,
+    /// Première ligne de son stdout : le résultat JSON.
+    result: Receiver<String>,
+}
+
+impl RefereeProcess {
+    fn spawn(vars: &Vars) -> Result<Self, GameError> {
+        let spawn_error = |error| GameError::Spawn {
+            who: "l'arbitre".into(),
+            error,
+        };
+        let mut child = vars
+            .command(&vars.cfg.referee, None)
+            .and_then(|mut c| c.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn())
+            .map_err(spawn_error)?;
+        let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
+            unreachable!("tubes demandés au lancement");
+        };
+
+        let (line_tx, lines) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                eprintln!("   [arbitre] {line}");
+                if line_tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(Self {
+            process: Reaper(child),
+            lines,
+            result: read_first_line(stdout),
+        })
+    }
+
+    /// Sans marqueur, on attend simplement `startup`.
+    fn wait_for(&self, marker: &str, startup: Duration) -> Result<Marker, GameError> {
+        if marker.is_empty() {
+            thread::sleep(startup);
+            return Ok(Marker::Seen);
+        }
+        loop {
+            match self.lines.recv_timeout(MARKER_TIMEOUT) {
+                Ok(line) if line.trim().starts_with(marker) => return Ok(Marker::Seen),
+                Ok(_) => {}
+                Err(RecvTimeoutError::Disconnected) => return Ok(Marker::RefereeExited),
+                Err(RecvTimeoutError::Timeout) => return Err(GameError::MarkerNeverSeen(marker.into())),
+            }
+        }
+    }
+
+    fn finish(mut self, timeout: Duration) -> Result<GameResult, GameError> {
+        let json = self
+            .result
+            .recv_timeout(timeout)
+            .map_err(|_| GameError::Timeout(timeout))?;
+        let status = self.process.0.wait().map_err(GameError::Wait)?;
+        if !status.success() {
+            return Err(GameError::RefereeFailed(status));
+        }
+        let result: GameResult = serde_json::from_str(&json).map_err(|error| GameError::BadResult { json, error })?;
+        result.validate()?;
+        Ok(result)
+    }
+}
+
+/// Lu dans un thread, pour pouvoir abandonner une partie qui ne finit jamais.
+fn read_first_line(stdout: ChildStdout) -> Receiver<String> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut line = String::new();
+        let _ = BufReader::new(stdout).read_line(&mut line);
+        let _ = tx.send(line);
+    });
+    rx
+}
+
+/// Tue le processus à la sortie de portée, et ses enfants directs : un script d'enrobage ne doit
+/// pas laisser d'orphelins. Tout reste dans notre groupe de processus pour que Ctrl+C les atteigne.
+struct Reaper(Child);
+
+impl Drop for Reaper {
+    fn drop(&mut self) {
+        let _ = Command::new("pkill")
+            .args(["-KILL", "-P", &self.0.id().to_string()])
+            .status();
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Lance `cleanup` à la sortie de portée.
+struct CleanupGuard(Option<Command>);
+
+impl CleanupGuard {
+    fn new(vars: &Vars) -> Self {
+        let cleanup = &vars.cfg.cleanup;
+        Self(
+            (!cleanup.is_empty())
+                .then(|| vars.command(cleanup, None).ok())
+                .flatten(),
+        )
+    }
+}
+
+impl Drop for CleanupGuard {
+    fn drop(&mut self) {
+        if let Some(command) = &mut self.0 {
+            let _ = command.stdout(Stdio::null()).stderr(Stdio::null()).status();
+        }
+    }
+}
+
+/// Joueur dont la sortie d'erreur va dans `log`, tronquée à `LOG_CAP` octets.
+fn spawn_logged(mut command: Command, log: &Path) -> io::Result<Reaper> {
+    let mut file = File::create(log)?;
+    let mut child = command.stdout(Stdio::null()).stderr(Stdio::piped()).spawn()?;
+    let Some(mut stderr) = child.stderr.take() else {
+        unreachable!("tube demandé au lancement");
+    };
+    thread::spawn(move || {
+        let mut kept = 0;
+        let mut buf = [0u8; 8192];
+        // On lit jusqu'au bout, même après le plafond, pour ne pas bloquer le joueur sur un tube plein.
+        while let Ok(n @ 1..) = stderr.read(&mut buf) {
+            if kept < LOG_CAP {
+                let take = n.min(LOG_CAP - kept);
+                let _ = file.write_all(&buf[..take]);
+                kept += take;
+                if kept == LOG_CAP {
+                    let _ = file.write_all("\n[journal tronqué]\n".as_bytes());
+                }
+            }
+        }
+    });
+    Ok(Reaper(child))
+}

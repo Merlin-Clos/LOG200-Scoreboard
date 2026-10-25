@@ -36,10 +36,11 @@ jobs:
           java-version: '24'
 
       # Le ladder execute les jars avec Java 24 : --release 24 garde le jar compatible meme avec un JDK plus recent.
+      # --date rend le jar reproductible : relancer le meme commit donne "deja actif" au lieu d'une nouvelle version.
       - name: Construire le jar
         run: |
           javac -encoding UTF-8 --release 24 -d bin src/*.java
-          jar --create --file client.jar --main-class Client -C bin .
+          jar --create --file client.jar --main-class Client --date "$(git log -1 --format=%cI)" -C bin .
 
       - name: Soumettre au ladder
         env:

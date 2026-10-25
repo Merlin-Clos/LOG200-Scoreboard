@@ -1,8 +1,4 @@
-//! Bots de test, pour faire tourner le ladder sans jars d'equipes. `random` joue un coup legal au
-//! hasard. `greedy` gagne tout de suite s'il le peut, sinon maximise sa mobilite moins celle de
-//! l'adversaire apres le coup, et tire au hasard entre les ex aequo.
-
-use std::str::FromStr;
+//! Stratégies des bots de test, pour faire tourner le ladder sans jars d'équipes.
 
 use rand::Rng;
 use rand::seq::IndexedRandom;
@@ -10,51 +6,43 @@ use rand::seq::IndexedRandom;
 use crate::board::{Board, Color, Move};
 use crate::rules::{self, mobility};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum)]
 pub enum Strategy {
+    /// Un coup légal au hasard.
     Random,
+    /// Gagne tout de suite si possible, sinon maximise sa mobilité moins celle de l'adversaire ;
+    /// hasard entre les ex aequo.
     Greedy,
 }
 
-impl FromStr for Strategy {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Strategy, String> {
-        match s {
-            "random" => Ok(Strategy::Random),
-            "greedy" => Ok(Strategy::Greedy),
-            _ => Err(format!("strategie inconnue : {s} (random ou greedy)")),
+impl Strategy {
+    pub fn choose(self, board: &Board, color: Color, rng: &mut impl Rng) -> Option<Move> {
+        let moves = rules::legal_moves(board, color);
+        match self {
+            Self::Random => moves.choose(rng).copied(),
+            Self::Greedy => greedy(board, color, &moves, rng),
         }
     }
 }
 
-/// `None` si `c` n'a aucun coup legal.
-pub fn choose(strategy: Strategy, b: &Board, c: Color, rng: &mut impl Rng) -> Option<Move> {
-    let moves = rules::legal_moves(b, c);
-    match strategy {
-        Strategy::Random => moves.choose(rng).copied(),
-        Strategy::Greedy => greedy(b, c, &moves, rng),
-    }
-}
-
-fn greedy(b: &Board, c: Color, moves: &[Move], rng: &mut impl Rng) -> Option<Move> {
-    let mut b = b.clone();
+fn greedy(board: &Board, color: Color, moves: &[Move], rng: &mut impl Rng) -> Option<Move> {
+    let mut board = board.clone();
     let mut best = Vec::new();
     let mut best_score = i32::MIN;
-    for &m in moves {
-        b.apply(m);
-        let won = !rules::has_moves(&b, c.other());
-        let score = mobility(&b, c) - mobility(&b, c.other());
-        b.undo(m);
+    for &mv in moves {
+        board.apply(mv);
+        let won = !rules::has_moves(&board, color.other());
+        let score = mobility(&board, color) - mobility(&board, color.other());
+        board.undo(mv);
         if won {
-            return Some(m);
+            return Some(mv);
         }
         if score > best_score {
             best_score = score;
             best.clear();
         }
         if score == best_score {
-            best.push(m);
+            best.push(mv);
         }
     }
     best.choose(rng).copied()
@@ -63,7 +51,7 @@ fn greedy(b: &Board, c: Color, moves: &[Move], rng: &mut impl Rng) -> Option<Mov
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::tests::diagram;
+    use crate::board::test_support::diagram;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
 
@@ -72,14 +60,14 @@ mod tests {
         let b = Board::initial();
         let mut rng = StdRng::seed_from_u64(1);
         for s in [Strategy::Random, Strategy::Greedy] {
-            let m = choose(s, &b, Color::Red, &mut rng).unwrap();
+            let m = s.choose(&b, Color::Red, &mut rng).unwrap();
             assert!(rules::is_legal(&b, Color::Red, m), "{s:?}");
         }
     }
 
     #[test]
     fn greedy_takes_immediate_win() {
-        // Noir en A12 n'a qu'une sortie (B11), rouge gagne en la detruisant.
+        // Noir en A12 n'a qu'une sortie (B11) : rouge gagne en la détruisant.
         let b = diagram(
             "B#..........
              #...........
@@ -95,7 +83,7 @@ mod tests {
              ............",
         );
         let mut rng = StdRng::seed_from_u64(1);
-        let m = choose(Strategy::Greedy, &b, Color::Red, &mut rng).unwrap();
+        let m = Strategy::Greedy.choose(&b, Color::Red, &mut rng).unwrap();
         let mut after = b.clone();
         after.apply(m);
         assert_eq!(rules::winner_after(&after, Color::Red), Some(Color::Red), "{m}");
@@ -115,21 +103,24 @@ mod tests {
                 } else {
                     Strategy::Random
                 };
-                let m = choose(s, &b, turn, &mut rng).expect("le joueur au trait a toujours un coup");
+                let m = s
+                    .choose(&b, turn, &mut rng)
+                    .expect("le joueur au trait a toujours un coup");
                 b.apply(m);
                 if let Some(w) = rules::winner_after(&b, turn) {
                     break w;
                 }
                 turn = turn.other();
             };
-            greedy_wins += (winner == greedy_color) as u32;
+            greedy_wins += u32::from(winner == greedy_color);
         }
         assert!(greedy_wins >= 16, "glouton : {greedy_wins}/20");
     }
 
     #[test]
     fn parses_names() {
-        assert_eq!("greedy".parse(), Ok(Strategy::Greedy));
-        assert!("2".parse::<Strategy>().is_err());
+        use clap::ValueEnum;
+        assert_eq!(Strategy::from_str("greedy", false), Ok(Strategy::Greedy));
+        assert!(Strategy::from_str("2", false).is_err());
     }
 }

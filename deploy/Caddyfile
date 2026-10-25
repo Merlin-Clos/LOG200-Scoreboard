@@ -1,6 +1,7 @@
 :80 {
 	root * /srv
 	redir / /web/
+	reverse_proxy /api/* ladder:8090
 	# Journaux des joueurs : restent prives.
 	respond /data/logs/* 404
 	header /data/* Cache-Control "no-cache"

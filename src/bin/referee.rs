@@ -1,137 +1,210 @@
-//! isolation-referee : arbitre d'une partie, avec le protocole du serveur officiel.
-//! Le contrat (marqueurs sur stderr, JSON sur stdout) est dans docs/formats.md.
-//!
-//! Usage : isolation-referee --port P --time-ms T [--opening "G1-G3-F9,F12-F10-G7"]
-//!                           [--max-invalid N] [--connect-timeout-ms 30000] [--bind 127.0.0.1]
+//! Arbitre d'une partie avec le protocole du serveur officiel. Le contrat avec le ladder (marqueurs
+//! sur stderr, résultat JSON sur stdout) est dans docs/formats.md.
 
 use std::net::{TcpListener, TcpStream};
+use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use isolation::board::{Board, Color, Move};
-use isolation::cli::{Args, die};
-use isolation::notation;
-use isolation::protocol::{LineConn, RecvError, ServerMsg};
-use isolation::record::{GameResult, InvalidCounts, Reason, VERSION};
-use isolation::rules;
+use anyhow::{Context, bail};
+use clap::Parser;
 
-fn main() {
-    let args = Args::from_env();
-    let port: u16 = args
-        .require("--port")
-        .parse()
-        .unwrap_or_else(|_| die("--port invalide"));
-    let time_ms: u64 = args
-        .require("--time-ms")
-        .parse()
-        .unwrap_or_else(|_| die("--time-ms invalide"));
-    let max_invalid: u32 = args.parse("--max-invalid", u32::MAX);
-    let connect_timeout = Duration::from_millis(args.parse("--connect-timeout-ms", 30_000));
-    let bind = args.get("--bind").unwrap_or("127.0.0.1");
-    let opening: Vec<String> = args
-        .get("--opening")
-        .map(|s| {
-            s.split(',')
-                .map(|m| m.trim().to_string())
-                .filter(|m| !m.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
+use isolation::board::{Board, ByColor, Color, Move, SIZE};
+use isolation::protocol::{LineConn, Outcome, RecvError, ServerMsg};
+use isolation::record::{GameResult, InvalidCounts, RECORD_VERSION, Reason};
+use isolation::rules::{self, Replay};
 
-    let board = match rules::replay(opening.iter().map(String::as_str)) {
-        Ok((_, _, Some(_))) => die("l'ouverture termine la partie"),
-        Ok((_, Color::Black, _)) => die("l'ouverture doit compter un nombre pair de demi-coups"),
-        Ok((b, Color::Red, None)) => b,
-        Err((i, m)) => die(&format!("coup d'ouverture {i} illegal : {m}")),
-    };
-    // Format canonique dans le resultat, quel que soit le format recu.
-    let opening: Vec<String> = opening
-        .iter()
-        .map(|m| notation::parse_move(m).unwrap().to_string())
-        .collect();
+#[derive(Parser)]
+#[command(
+    name = "isolation-referee",
+    version,
+    about = "Arbitre une partie d'Isolation entre deux clients TCP"
+)]
+struct Cli {
+    #[arg(long)]
+    port: u16,
+    /// Temps par coup.
+    #[arg(long)]
+    time_ms: u64,
+    /// Demi-coups imposés avant la main aux joueurs, en nombre pair : `G1-G4-F9,F12-F10-G7`.
+    #[arg(long, default_value = "", value_parser = parse_opening)]
+    opening: Opening,
+    /// Coups invalides tolérés avant défaite ; illimité par défaut.
+    #[arg(long, default_value_t = u32::MAX, hide_default_value = true)]
+    max_invalid: u32,
+    /// Délai de connexion, pour chaque joueur.
+    #[arg(long, default_value_t = 30_000)]
+    connect_timeout_ms: u64,
+    #[arg(long, default_value = "127.0.0.1")]
+    bind: String,
+}
 
-    let listener = TcpListener::bind((bind, port)).unwrap_or_else(|e| die(&format!("ecoute sur {bind}:{port} : {e}")));
-    eprintln!("LISTENING {port}");
+#[derive(Clone)]
+struct Opening(Vec<Move>);
+
+fn parse_opening(text: &str) -> Result<Opening, String> {
+    let moves = text
+        .split(',')
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(|m| m.parse().map_err(|e| format!("{e}")))
+        .collect::<Result<Vec<Move>, _>>()?;
+    Ok(Opening(moves))
+}
+
+fn main() -> ExitCode {
+    match run(&Cli::parse()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("erreur : {e:#}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn run(cli: &Cli) -> anyhow::Result<()> {
+    let board = opening_board(&cli.opening.0)?;
+    let listener = TcpListener::bind((cli.bind.as_str(), cli.port))
+        .with_context(|| format!("écoute sur {}:{}", cli.bind, cli.port))?;
+    eprintln!("LISTENING {}", cli.port);
 
     let start = Instant::now();
-    let mut players: Vec<LineConn> = Vec::with_capacity(2);
-    let mut absent = None;
-    for color in [Color::Red, Color::Black] {
-        // Un delai par joueur : le ladder ne lance le noir qu'apres la connexion du rouge.
-        let Some(stream) = accept(&listener, Instant::now() + connect_timeout) else {
-            eprintln!("{} ne s'est pas connecte", color.name());
-            absent = Some(color);
-            break;
+    let connect_timeout = Duration::from_millis(cli.connect_timeout_ms);
+    let (verdict, moves, invalid) = match seat_players(&listener, connect_timeout, cli.time_ms, &board)? {
+        Lobby::Ready(players) => {
+            let mut referee = Referee {
+                board,
+                players,
+                time: Duration::from_millis(cli.time_ms),
+                max_invalid: cli.max_invalid,
+                moves: Vec::new(),
+                invalid: InvalidCounts::default(),
+            };
+            let verdict = referee.run();
+            referee.players.red.shutdown();
+            referee.players.black.shutdown();
+            (verdict, referee.moves, referee.invalid)
+        }
+        Lobby::NoShow { absent, red } => {
+            // Le rouge déjà connecté apprend qu'il gagne, sans coup joué.
+            if let Some(mut red) = red {
+                let _ = red.send(ServerMsg::End {
+                    outcome: Outcome::Win,
+                    last: None,
+                });
+                red.shutdown();
+            }
+            let verdict = Verdict {
+                winner: absent.other(),
+                reason: Reason::NoShow,
+            };
+            (verdict, Vec::new(), InvalidCounts::default())
+        }
+    };
+
+    let result = GameResult {
+        v: RECORD_VERSION,
+        time_ms: cli.time_ms,
+        opening: cli.opening.0.iter().map(Move::to_string).collect(),
+        moves: moves.iter().map(Move::to_string).collect(),
+        winner: verdict.winner,
+        reason: verdict.reason,
+        invalid,
+        duration_ms: u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+    };
+    eprintln!(
+        "gagnant {} ({:?}) en {} coups",
+        verdict.winner,
+        verdict.reason,
+        result.moves.len()
+    );
+    println!("{}", serde_json::to_string(&result)?);
+    Ok(())
+}
+
+/// Plateau après l'ouverture, qui doit laisser la main au rouge sans finir la partie.
+fn opening_board(opening: &[Move]) -> anyhow::Result<Board> {
+    let replay = Replay::from_moves(opening.iter().copied()).context("ouverture")?;
+    if replay.winner.is_some() {
+        bail!("l'ouverture termine la partie");
+    }
+    if replay.turn != Color::Red {
+        bail!("l'ouverture doit compter un nombre pair de demi-coups");
+    }
+    Ok(replay.board)
+}
+
+enum Lobby {
+    Ready(ByColor<LineConn>),
+    NoShow { absent: Color, red: Option<LineConn> },
+}
+
+/// Le premier client connecté joue le rouge, le second le noir.
+fn seat_players(listener: &TcpListener, timeout: Duration, time_ms: u64, board: &Board) -> anyhow::Result<Lobby> {
+    let seat = |color| -> anyhow::Result<Option<LineConn>> {
+        // Un délai par joueur : le ladder ne lance le noir qu'après la connexion du rouge.
+        let Some(stream) = accept(listener, Instant::now() + timeout).context("attente des joueurs")? else {
+            eprintln!("{color} ne s'est pas connecté");
+            return Ok(None);
         };
-        let mut conn = LineConn::new(stream).unwrap_or_else(|e| die(&format!("socket : {e}")));
-        eprintln!("CONNECTED {}", color.name());
-        let mut hello = vec![ServerMsg::NewGame {
-            rows: 12,
-            cols: 12,
+        let mut conn = LineConn::new(stream).context("socket")?;
+        eprintln!("CONNECTED {color}");
+        // Un échec d'envoi ici sera vu comme une déconnexion au premier tour du joueur.
+        let _ = conn.send(ServerMsg::NewGame {
+            rows: SIZE.into(),
+            cols: SIZE.into(),
             time_ms,
             color,
-        }];
+        });
         if color == Color::Black {
-            hello.push(ServerMsg::Board {
+            let _ = conn.send(ServerMsg::Board {
                 color,
                 board: board.clone(),
             });
         }
-        // Une erreur d'envoi ici sera revue comme deconnexion au premier tour du joueur.
-        for msg in hello {
-            let _ = conn.send(&msg.encode());
-        }
-        players.push(conn);
-    }
+        Ok(Some(conn))
+    };
+    let Some(red) = seat(Color::Red)? else {
+        return Ok(Lobby::NoShow {
+            absent: Color::Red,
+            red: None,
+        });
+    };
+    Ok(match seat(Color::Black)? {
+        Some(black) => Lobby::Ready(ByColor { red, black }),
+        None => Lobby::NoShow {
+            absent: Color::Black,
+            red: Some(red),
+        },
+    })
+}
 
-    let mut game = Referee {
-        board,
-        players,
-        time: Duration::from_millis(time_ms),
-        max_invalid,
-        moves: Vec::new(),
-        invalid: InvalidCounts::default(),
-    };
-    let (winner, reason) = match absent {
-        // Le joueur absent perd sans qu'aucun coup soit joue ; le rouge, s'il est la, est prevenu.
-        Some(color) => {
-            if color == Color::Black {
-                game.send(
-                    Color::Red,
-                    &ServerMsg::End {
-                        result: "WIN".into(),
-                        last: None,
-                    },
-                );
+fn accept(listener: &TcpListener, deadline: Instant) -> std::io::Result<Option<TcpStream>> {
+    listener.set_nonblocking(true)?;
+    loop {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                stream.set_nonblocking(false)?;
+                return Ok(Some(stream));
             }
-            (color.other(), Reason::NoShow)
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if Instant::now() > deadline {
+                    return Ok(None);
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => return Err(e),
         }
-        None => game.run(),
-    };
-    for p in &game.players {
-        p.shutdown();
     }
-    let result = GameResult {
-        v: VERSION,
-        time_ms,
-        opening,
-        moves: game.moves.iter().map(Move::to_string).collect(),
-        winner,
-        reason,
-        invalid: game.invalid,
-        duration_ms: start.elapsed().as_millis() as u64,
-    };
-    eprintln!(
-        "gagnant {} ({:?}) en {} coups",
-        winner.name(),
-        reason,
-        result.moves.len()
-    );
-    println!("{}", serde_json::to_string(&result).expect("serialisation"));
+}
+
+struct Verdict {
+    winner: Color,
+    reason: Reason,
 }
 
 struct Referee {
     board: Board,
-    players: Vec<LineConn>,
+    players: ByColor<LineConn>,
     time: Duration,
     max_invalid: u32,
     moves: Vec<Move>,
@@ -139,11 +212,11 @@ struct Referee {
 }
 
 impl Referee {
-    fn send(&mut self, c: Color, msg: &ServerMsg) -> bool {
-        self.players[c.index()].send(&msg.encode()).is_ok()
+    fn send(&mut self, color: Color, msg: ServerMsg) -> bool {
+        self.players[color].send(msg).is_ok()
     }
 
-    fn run(&mut self) -> (Color, Reason) {
+    fn run(&mut self) -> Verdict {
         let mut turn = Color::Red;
         loop {
             let request = match self.moves.last() {
@@ -151,86 +224,73 @@ impl Referee {
                     color: Color::Red,
                     board: self.board.clone(),
                 },
-                Some(&m) => ServerMsg::Request(Some(m)),
+                Some(&last) => ServerMsg::Request(Some(last)),
             };
-            if !self.send(turn, &request) {
+            if !self.send(turn, request) {
                 return self.forfeit(turn, Reason::Disconnect);
             }
-            let deadline = Instant::now() + self.time;
-            let m = loop {
-                match self.players[turn.index()].recv(Some(deadline)) {
-                    Err(RecvError::Timeout) => return self.forfeit(turn, Reason::Timeout),
-                    Err(_) => return self.forfeit(turn, Reason::Disconnect),
-                    Ok(line) => match notation::parse_move(&line).filter(|&m| rules::is_legal(&self.board, turn, m)) {
-                        Some(m) => break m,
-                        None => {
-                            self.invalid.add(turn);
-                            eprintln!("coup invalide de {} : {line:?}", turn.name());
-                            let count = match turn {
-                                Color::Red => self.invalid.red,
-                                Color::Black => self.invalid.black,
-                            };
-                            if count >= self.max_invalid {
-                                return self.forfeit(turn, Reason::Protocol);
-                            }
-                            if !self.send(turn, &ServerMsg::Invalid) {
-                                return self.forfeit(turn, Reason::Disconnect);
-                            }
-                        }
-                    },
-                }
+            let mv = match self.receive_move(turn) {
+                Ok(mv) => mv,
+                Err(reason) => return self.forfeit(turn, reason),
             };
-            self.board.apply(m);
-            self.moves.push(m);
+            self.board.apply(mv);
+            self.moves.push(mv);
             if let Some(winner) = rules::winner_after(&self.board, turn) {
-                for (c, result) in [(winner, "WIN"), (winner.other(), "LOSS")] {
+                for (color, outcome) in [(winner, Outcome::Win), (winner.other(), Outcome::Loss)] {
                     self.send(
-                        c,
-                        &ServerMsg::End {
-                            result: result.into(),
-                            last: Some(m),
+                        color,
+                        ServerMsg::End {
+                            outcome,
+                            last: Some(mv),
                         },
                     );
                 }
-                return (winner, Reason::NoMoves);
+                return Verdict {
+                    winner,
+                    reason: Reason::NoMoves,
+                };
             }
             turn = turn.other();
         }
     }
 
-    /// `loser` perd sans avoir joue. Comme le serveur officiel, on annonce un timeout par `5 TIMEOUT`
-    /// aux deux joueurs. Les autres cas recoivent WIN ou LOSS, sans coup.
-    fn forfeit(&mut self, loser: Color, reason: Reason) -> (Color, Reason) {
-        let winner = loser.other();
-        for (c, result) in [(winner, "WIN"), (loser, "LOSS")] {
-            let result = if reason == Reason::Timeout { "TIMEOUT" } else { result };
-            self.send(
-                c,
-                &ServerMsg::End {
-                    result: result.into(),
-                    last: None,
-                },
-            );
-        }
-        (winner, reason)
-    }
-}
-
-fn accept(listener: &TcpListener, deadline: Instant) -> Option<TcpStream> {
-    listener.set_nonblocking(true).ok()?;
-    loop {
-        match listener.accept() {
-            Ok((s, _)) => {
-                s.set_nonblocking(false).ok()?;
-                return Some(s);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                if Instant::now() > deadline {
-                    return None;
+    /// Premier coup légal de `turn` avant l'échéance ; chaque coup refusé est répondu par `4`.
+    fn receive_move(&mut self, turn: Color) -> Result<Move, Reason> {
+        let deadline = Instant::now() + self.time;
+        loop {
+            let line = match self.players[turn].recv(Some(deadline)) {
+                Ok(line) => line,
+                Err(RecvError::Timeout) => return Err(Reason::Timeout),
+                Err(_) => return Err(Reason::Disconnect),
+            };
+            match line.parse() {
+                Ok(mv) if rules::is_legal(&self.board, turn, mv) => return Ok(mv),
+                _ => {
+                    self.invalid[turn] += 1;
+                    eprintln!("coup invalide de {turn} : {line:?}");
+                    if self.invalid[turn] >= self.max_invalid {
+                        return Err(Reason::Protocol);
+                    }
+                    if !self.send(turn, ServerMsg::Invalid) {
+                        return Err(Reason::Disconnect);
+                    }
                 }
-                std::thread::sleep(Duration::from_millis(20));
             }
-            Err(_) => return None,
         }
+    }
+
+    /// Comme le serveur officiel : `5 TIMEOUT` aux deux joueurs pour un temps dépassé, sinon WIN ou
+    /// LOSS ; jamais de dernier coup.
+    fn forfeit(&mut self, loser: Color, reason: Reason) -> Verdict {
+        let winner = loser.other();
+        for (color, outcome) in [(winner, Outcome::Win), (loser, Outcome::Loss)] {
+            let outcome = if reason == Reason::Timeout {
+                Outcome::Timeout
+            } else {
+                outcome
+            };
+            self.send(color, ServerMsg::End { outcome, last: None });
+        }
+        Verdict { winner, reason }
     }
 }

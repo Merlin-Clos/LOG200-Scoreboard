@@ -31,7 +31,7 @@ Le ladder lance l'arbitre à partir d'un gabarit configurable (`referee` dans `l
 | --- | --- |
 | `port` | Port TCP d'écoute. Les parties se jouent l'une après l'autre sur ce port. |
 | `time_ms` | Temps par coup, annoncé aux clients et appliqué (500 ms au ladder, 5000 ms au tournoi). |
-| `opening` | Optionnel. Demi-coups imposés avant de donner la main aux clients, séparés par des virgules (`G1-G3-F9,F12-F10-G7`). Toujours en nombre pair, pour que le rouge joue le premier coup client. |
+| `opening` | Optionnel. Demi-coups imposés avant de donner la main aux clients, séparés par des virgules (`G1-G4-F9,F12-F10-G7`). Toujours en nombre pair, pour que le rouge joue le premier coup client. |
 
 ### Déroulement
 

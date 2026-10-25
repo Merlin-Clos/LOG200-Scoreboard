@@ -1,35 +1,61 @@
-//! Lecture et ecriture des coups. Le parseur reproduit la tolerance du serveur
-//! officiel : ' ' et '-' sont des separateurs en nombre quelconque, y compris
-//! zero (`G1E3C12`), et les lettres sont insensibles a la casse.
+//! Notation des cases et des coups. Le parseur a la tolérance du serveur officiel : ' ' et '-'
+//! séparent en nombre quelconque, y compris zéro (`G1E3C12`), et la casse est ignorée.
+
+use std::fmt;
+use std::str::FromStr;
+
+use thiserror::Error;
 
 use crate::board::{Move, SIZE, Square};
 
-/// Format envoye par le serveur officiel dans les messages 3 et 5.
-pub fn to_protocol(m: Move) -> String {
-    format!("{} - {} - {}", m.from, m.to, m.destroyed)
-}
+#[derive(Debug, Error, PartialEq, Eq)]
+#[error("notation illisible : {0:?}")]
+pub struct NotationError(pub String);
 
-pub fn parse_square(s: &str) -> Option<Square> {
-    let mut p = Parser::new(s.trim());
-    let sq = p.square()?;
-    p.skip_separators();
-    p.at_end().then_some(sq)
-}
+impl FromStr for Square {
+    type Err = NotationError;
 
-/// Exige exactement trois cases. Ne verifie pas la legalite.
-pub fn parse_move(s: &str) -> Option<Move> {
-    let mut p = Parser::new(s.trim());
-    let mut squares = [Square::new(0, 0); 3];
-    for sq in &mut squares {
-        p.skip_separators();
-        *sq = p.square()?;
+    fn from_str(s: &str) -> Result<Self, NotationError> {
+        let mut parser = Parser::new(s.trim());
+        parser
+            .square()
+            .filter(|_| parser.finish())
+            .ok_or_else(|| NotationError(s.to_string()))
     }
-    p.skip_separators();
-    p.at_end().then_some(Move {
-        from: squares[0],
-        to: squares[1],
-        destroyed: squares[2],
-    })
+}
+
+impl FromStr for Move {
+    type Err = NotationError;
+
+    /// Exige exactement trois cases, sans vérifier la légalité.
+    fn from_str(s: &str) -> Result<Self, NotationError> {
+        let mut parser = Parser::new(s.trim());
+        parser
+            .mv()
+            .filter(|_| parser.finish())
+            .ok_or_else(|| NotationError(s.to_string()))
+    }
+}
+
+impl Move {
+    /// Format des messages 3 et 5 du serveur officiel : `G1 - E3 - C12`.
+    pub const fn protocol(self) -> impl fmt::Display {
+        ProtocolMove(self)
+    }
+}
+
+/// Coups séparés par des virgules, comme l'option `--opening` de l'arbitre.
+pub fn join(moves: &[Move]) -> String {
+    moves.iter().map(Move::to_string).collect::<Vec<_>>().join(",")
+}
+
+struct ProtocolMove(Move);
+
+impl fmt::Display for ProtocolMove {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let Move { from, to, destroyed } = self.0;
+        write!(f, "{from} - {to} - {destroyed}")
+    }
 }
 
 struct Parser<'a> {
@@ -38,14 +64,16 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(s: &'a str) -> Parser<'a> {
-        Parser {
+    const fn new(s: &'a str) -> Self {
+        Self {
             bytes: s.as_bytes(),
             pos: 0,
         }
     }
 
-    fn at_end(&self) -> bool {
+    /// Vrai s'il ne reste que des séparateurs.
+    fn finish(&mut self) -> bool {
+        self.skip_separators();
         self.pos == self.bytes.len()
     }
 
@@ -55,22 +83,29 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn mv(&mut self) -> Option<Move> {
+        Some(Move {
+            from: self.next_square()?,
+            to: self.next_square()?,
+            destroyed: self.next_square()?,
+        })
+    }
+
+    fn next_square(&mut self) -> Option<Square> {
+        self.skip_separators();
+        self.square()
+    }
+
     fn square(&mut self) -> Option<Square> {
-        let letter = self.bytes.get(self.pos)?.to_ascii_uppercase();
-        if !(b'A'..b'A' + SIZE as u8).contains(&letter) {
-            return None;
-        }
+        let x = self.bytes.get(self.pos)?.to_ascii_uppercase().checked_sub(b'A')?;
         self.pos += 1;
-        let start = self.pos;
-        let mut row: u32 = 0;
-        while let Some(d @ b'0'..=b'9') = self.bytes.get(self.pos) {
-            row = row.saturating_mul(10).saturating_add((d - b'0') as u32);
-            self.pos += 1;
-        }
-        if self.pos == start || row == 0 || row > SIZE as u32 {
-            return None;
-        }
-        Some(Square::new((letter - b'A') as i8, SIZE - row as i8))
+        let digits = self.bytes[self.pos..].iter().take_while(|b| b.is_ascii_digit()).count();
+        let row: u8 = std::str::from_utf8(&self.bytes[self.pos..self.pos + digits])
+            .ok()?
+            .parse()
+            .ok()?;
+        self.pos += digits;
+        Square::new(x, SIZE.checked_sub(row)?).filter(|_| row > 0)
     }
 }
 
@@ -78,14 +113,14 @@ impl<'a> Parser<'a> {
 mod tests {
     use super::*;
 
-    fn mv(s: &str) -> String {
-        parse_move(s).map(|m| m.to_string()).unwrap_or_default()
+    fn canonical(s: &str) -> String {
+        s.parse::<Move>().map(|m| m.to_string()).unwrap_or_default()
     }
 
     #[test]
     fn accepts_all_server_formats() {
         for s in ["G1-E3-C12", "G1E3C12", "G1 - E3 - C12", "g1 e3 c12", "  G1--E3 C12 "] {
-            assert_eq!(mv(s), "G1-E3-C12", "{s:?}");
+            assert_eq!(canonical(s), "G1-E3-C12", "{s:?}");
         }
     }
 
@@ -97,20 +132,23 @@ mod tests {
             "G1-E3-C12-D4",
             "G0-E3-C12",
             "G13-E3-C12",
+            "G999-E3-C12",
             "M1-E3-C12",
             "G1;E3;C12",
             "G-E3-C12",
+            "@1-E3-C12",
         ] {
-            assert!(parse_move(s).is_none(), "{s:?}");
+            assert!(s.parse::<Move>().is_err(), "{s:?}");
         }
     }
 
     #[test]
     fn coordinates_follow_server_convention() {
-        let m = parse_move("A12-L1-F12").unwrap();
-        assert_eq!(m.from, Square::new(0, 0));
-        assert_eq!(m.to, Square::new(11, 11));
-        assert_eq!(m.destroyed, Square::new(5, 0));
-        assert_eq!(to_protocol(m), "A12 - L1 - F12");
+        let mv: Move = "A12-L1-F12".parse().unwrap();
+        assert_eq!(mv.from, Square::new(0, 0).unwrap());
+        assert_eq!(mv.to, Square::new(11, 11).unwrap());
+        assert_eq!(mv.destroyed, Square::new(5, 0).unwrap());
+        assert_eq!(mv.protocol().to_string(), "A12 - L1 - F12");
+        assert_eq!("l1 ".parse(), Ok(Square::new(11, 11).unwrap()));
     }
 }

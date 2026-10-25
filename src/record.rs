@@ -1,51 +1,39 @@
-//! Formats decrits dans docs/formats.md. `GameResult` est ce que l'arbitre ecrit sur stdout,
-//! `GameRecord` la ligne du JSONL, completee par le ladder. Les versions inconnues sont ignorees.
+//! `GameResult` est ce que l'arbitre écrit sur stdout, `GameRecord` la ligne du JSONL, complétée
+//! par le ladder. Les lignes de version inconnue sont ignorées.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
-use crate::board::Color;
-use crate::rules;
+use crate::board::{ByColor, Color};
+use crate::rules::{Replay, ReplayError};
 
-pub const VERSION: u32 = 1;
+pub const RECORD_VERSION: u32 = 1;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum Reason {
     NoMoves,
     Timeout,
-    /// Connexion fermee ou processus termine en cours de partie.
+    /// Connexion fermée ou processus terminé en cours de partie.
     Disconnect,
-    /// Le joueur n'a jamais envoye de coup valide malgre les `4` (voir `--max-invalid`).
+    /// Jamais de coup valide malgré les `4` (voir `--max-invalid`).
     Protocol,
-    /// Le joueur ne s'est jamais connecte (jar qui plante au demarrage, conteneur tue...).
+    /// Jamais connecté (jar qui plante au démarrage, conteneur tué...).
     NoShow,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
-pub struct InvalidCounts {
-    pub red: u32,
-    pub black: u32,
-}
+pub type InvalidCounts = ByColor<u32>;
 
-impl InvalidCounts {
-    pub fn add(&mut self, c: Color) {
-        match c {
-            Color::Red => self.red += 1,
-            Color::Black => self.black += 1,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct GameResult {
     pub v: u32,
     pub time_ms: u64,
-    /// Demi-coups imposes par l'arbitre avant de donner la main aux joueurs.
+    /// Demi-coups imposés par l'arbitre avant de donner la main aux joueurs.
     #[serde(default)]
     pub opening: Vec<String>,
-    /// Coups joues par les clients, format canonique `G1-E3-C12`.
+    /// Coups joués par les clients, en notation canonique.
     pub moves: Vec<String>,
     pub winner: Color,
     pub reason: Reason,
@@ -54,22 +42,21 @@ pub struct GameResult {
     pub duration_ms: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct Player {
     pub team: String,
-    /// 16 premiers caracteres hex du sha256 du jar. Un nouveau hash marque une nouvelle soumission.
+    /// Identifie la version du jar : un nouveau hash marque une nouvelle soumission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<String>,
-    /// Joueur de reference optionnel : rating fixe dans le classement.
+    /// Joueur de référence : rating fixe dans le classement.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub anchor: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct GameRecord {
     pub id: String,
     pub session: String,
-    /// RFC 3339, UTC.
     pub ts: String,
     pub red: Player,
     pub black: Player,
@@ -77,57 +64,105 @@ pub struct GameRecord {
     pub result: GameResult,
 }
 
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ValidationError {
+    #[error(transparent)]
+    Replay(#[from] ReplayError),
+    #[error("no_show annoncé après des coups joués")]
+    NoShowAfterMoves,
+    #[error("no_moves annoncé, gagnant rejoué : {replayed:?}")]
+    WrongWinner { replayed: Option<Color> },
+    #[error("partie déjà terminée avant l'abandon annoncé")]
+    ForfeitAfterEnd,
+    #[error("le gagnant {0} était au trait")]
+    WinnerToMove(Color),
+}
+
 impl GameResult {
-    /// Verifie que les coups sont legaux et coherents avec le resultat annonce.
-    pub fn validate(&self) -> Result<(), String> {
+    /// Coups légaux et résultat cohérent avec le rejeu.
+    pub fn validate(&self) -> Result<(), ValidationError> {
         let all = self.opening.iter().chain(&self.moves).map(String::as_str);
-        let (_, turn, winner) = rules::replay(all).map_err(|(i, m)| format!("coup {i} illegal : {m}"))?;
+        let Replay { turn, winner, .. } = Replay::from_notation(all)?;
         match self.reason {
-            Reason::NoShow if !self.moves.is_empty() => Err("no_show annonce apres des coups joues".into()),
-            Reason::NoShow => Ok(()),
-            Reason::NoMoves if winner != Some(self.winner) => {
-                Err(format!("no_moves annonce, gagnant rejoue : {winner:?}"))
+            Reason::NoShow if !self.moves.is_empty() => Err(ValidationError::NoShowAfterMoves),
+            Reason::NoMoves if winner != Some(self.winner) => Err(ValidationError::WrongWinner { replayed: winner }),
+            Reason::NoShow | Reason::NoMoves => Ok(()),
+            // Abandon : c'est le joueur au trait qui perd.
+            Reason::Timeout | Reason::Disconnect | Reason::Protocol => {
+                if winner.is_some() {
+                    Err(ValidationError::ForfeitAfterEnd)
+                } else if self.winner == turn {
+                    Err(ValidationError::WinnerToMove(turn))
+                } else {
+                    Ok(())
+                }
             }
-            Reason::NoMoves => Ok(()),
-            // Le joueur au trait a perdu (temps, deconnexion ou coups invalides).
-            _ if winner.is_some() => Err("partie deja terminee avant l'abandon annonce".into()),
-            _ if self.winner == turn => Err(format!("le gagnant {} etait au trait", turn.name())),
-            _ => Ok(()),
         }
     }
 }
 
-/// Lit un JSONL en sautant les lignes illisibles (par exemple une derniere ligne en cours
-/// d'ecriture) et les versions inconnues. Renvoie aussi leurs numeros (a partir de 1) et la raison.
-pub fn parse_jsonl(text: &str) -> (Vec<GameRecord>, Vec<(usize, String)>) {
-    let mut games = Vec::new();
-    let mut skipped = Vec::new();
-    for (i, line) in text.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let parsed = serde_json::from_str::<serde_json::Value>(line)
-            .map_err(|e| e.to_string())
-            .and_then(|v| match v.get("v").and_then(|v| v.as_u64()) {
-                Some(1) => serde_json::from_value::<GameRecord>(v).map_err(|e| e.to_string()),
-                other => Err(format!("version non geree : {other:?}")),
-            });
-        match parsed {
-            Ok(g) => games.push(g),
-            Err(e) => skipped.push((i + 1, e)),
-        }
-    }
-    (games, skipped)
+#[derive(Debug, Error)]
+pub enum SkipReason {
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("version non gérée : {0:?}")]
+    Version(Option<u64>),
 }
 
+#[derive(Debug)]
+pub struct SkippedLine {
+    /// À partir de 1.
+    pub line: usize,
+    pub reason: SkipReason,
+}
+
+/// Contenu d'un JSONL. Les lignes illisibles, comme une dernière ligne en cours d'écriture, sont
+/// mises de côté plutôt que de faire échouer la lecture.
+#[derive(Debug, Default)]
+pub struct Jsonl {
+    pub games: Vec<GameRecord>,
+    pub skipped: Vec<SkippedLine>,
+}
+
+impl Jsonl {
+    pub fn parse(text: &str) -> Self {
+        let mut jsonl = Self::default();
+        for (index, line) in text.lines().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match parse_line(line) {
+                Ok(game) => jsonl.games.push(game),
+                Err(reason) => jsonl.skipped.push(SkippedLine {
+                    line: index + 1,
+                    reason,
+                }),
+            }
+        }
+        jsonl
+    }
+}
+
+fn parse_line(line: &str) -> Result<GameRecord, SkipReason> {
+    let value: serde_json::Value = serde_json::from_str(line)?;
+    match value.get("v").and_then(serde_json::Value::as_u64) {
+        Some(v) if v == u64::from(RECORD_VERSION) => Ok(serde_json::from_value(value)?),
+        other => Err(SkipReason::Version(other)),
+    }
+}
+
+/// Heure courante en RFC 3339 UTC, à la milliseconde.
 pub fn now_rfc3339() -> String {
-    let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    rfc3339(d.as_secs() as i64, d.subsec_millis())
+    let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    rfc3339(
+        i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX),
+        elapsed.subsec_millis(),
+    )
 }
 
 fn rfc3339(secs: i64, millis: u32) -> String {
     let (days, rem) = (secs.div_euclid(86400), secs.rem_euclid(86400));
-    // Conversion jours -> date civile (algorithme de H. Hinnant).
+    // Jours -> date civile, algorithme de H. Hinnant.
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -152,7 +187,7 @@ mod tests {
     use crate::rules::legal_moves;
 
     fn sample() -> GameRecord {
-        let m = legal_moves(&Board::initial(), Color::Red)[0].to_string();
+        let mv = legal_moves(&Board::initial(), Color::Red)[0].to_string();
         GameRecord {
             id: "g1".into(),
             session: "test".into(),
@@ -168,10 +203,10 @@ mod tests {
                 anchor: true,
             },
             result: GameResult {
-                v: VERSION,
+                v: RECORD_VERSION,
                 time_ms: 500,
                 opening: vec![],
-                moves: vec![m],
+                moves: vec![mv],
                 winner: Color::Red,
                 reason: Reason::Timeout,
                 invalid: InvalidCounts { red: 0, black: 1 },
@@ -184,9 +219,21 @@ mod tests {
     fn jsonl_roundtrip_skips_truncated_and_unknown_versions() {
         let line = serde_json::to_string(&sample()).unwrap();
         let text = format!("{line}\n{{\"v\":2}}\n{}", &line[..line.len() / 2]);
-        let (games, skipped) = parse_jsonl(&text);
-        assert_eq!(games, vec![sample()]);
-        assert_eq!(skipped.iter().map(|s| s.0).collect::<Vec<_>>(), [2, 3]);
+        let jsonl = Jsonl::parse(&text);
+        assert_eq!(jsonl.games, vec![sample()]);
+        assert_eq!(jsonl.skipped.iter().map(|s| s.line).collect::<Vec<_>>(), [2, 3]);
+        assert!(matches!(jsonl.skipped[0].reason, SkipReason::Version(Some(2))));
+        assert!(matches!(jsonl.skipped[1].reason, SkipReason::Json(_)));
+    }
+
+    #[test]
+    fn jsonl_line_is_stable() {
+        let game = sample();
+        let expected = format!(
+            r#"{{"id":"g1","session":"test","ts":"2026-10-24T12:00:00.000Z","red":{{"team":"eq01","build":"abc"}},"black":{{"team":"eq02","anchor":true}},"v":1,"time_ms":500,"opening":[],"moves":["{}"],"winner":"red","reason":"timeout","invalid":{{"red":0,"black":1}},"duration_ms":1234}}"#,
+            game.result.moves[0]
+        );
+        assert_eq!(serde_json::to_string(&game).unwrap(), expected);
     }
 
     #[test]
@@ -202,25 +249,28 @@ mod tests {
 
     #[test]
     fn validate_checks_winner_consistency() {
-        // Apres un coup rouge, c'est au noir : un timeout le fait perdre.
-        assert!(sample().result.validate().is_ok());
+        // Après un coup rouge, c'est au noir : un timeout le fait perdre.
+        assert_eq!(sample().result.validate(), Ok(()));
         let mut wrong = sample().result;
         wrong.winner = Color::Black;
-        assert!(wrong.validate().is_err());
+        assert_eq!(wrong.validate(), Err(ValidationError::WinnerToMove(Color::Black)));
         let mut no_moves = sample().result;
         no_moves.reason = Reason::NoMoves;
-        assert!(no_moves.validate().is_err());
+        assert_eq!(
+            no_moves.validate(),
+            Err(ValidationError::WrongWinner { replayed: None })
+        );
     }
 
     #[test]
     fn no_show_requires_no_moves_and_accepts_either_winner() {
         let mut absent = sample().result;
         absent.reason = Reason::NoShow;
-        assert!(absent.validate().is_err());
+        assert_eq!(absent.validate(), Err(ValidationError::NoShowAfterMoves));
         absent.moves.clear();
         for winner in [Color::Red, Color::Black] {
             absent.winner = winner;
-            assert!(absent.validate().is_ok(), "{winner:?}");
+            assert_eq!(absent.validate(), Ok(()), "{winner:?}");
         }
         let v: serde_json::Value = serde_json::to_value(Reason::NoShow).unwrap();
         assert_eq!(v, "no_show");

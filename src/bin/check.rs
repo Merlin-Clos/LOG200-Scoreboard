@@ -1,62 +1,105 @@
-//! isolation-check : rejoue avec notre moteur les parties d'un JSONL du ladder ou d'une sauvegarde du
-//! serveur officiel (`BOARDGAME 1`).
-//!
-//! Usage : isolation-check FICHIER...   (code de sortie 1 si une partie est invalide)
+//! Rejoue avec notre moteur les parties d'un JSONL du ladder ou d'une sauvegarde du serveur
+//! officiel (`BOARDGAME 1`).
 
-use isolation::record::parse_jsonl;
-use isolation::rules;
+use std::path::PathBuf;
+use std::process::ExitCode;
 
-fn main() {
-    let files: Vec<String> = std::env::args().skip(1).collect();
-    if files.is_empty() {
-        eprintln!("usage : isolation-check FICHIER...");
-        std::process::exit(2);
-    }
+use clap::Parser;
+use thiserror::Error;
+
+use isolation::record::Jsonl;
+use isolation::rules::{Replay, ReplayError};
+
+#[derive(Parser)]
+#[command(
+    name = "isolation-check",
+    version,
+    about = "Valide des parties (JSONL du ladder ou sauvegarde BOARDGAME) ; code 1 si l'une est invalide"
+)]
+struct Cli {
+    #[arg(required = true)]
+    files: Vec<PathBuf>,
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
     let mut failures = 0;
-    for path in &files {
-        let text = match std::fs::read_to_string(path) {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("{path} : {e}");
-                failures += 1;
-                continue;
-            }
-        };
-        let errors = if text.starts_with("BOARDGAME") {
-            check_save(&text)
-        } else {
-            check_jsonl(&text)
+    for path in &cli.files {
+        let path_name = path.display();
+        let errors = match std::fs::read_to_string(path) {
+            Ok(text) if text.starts_with("BOARDGAME") => check_save(&text),
+            Ok(text) => check_jsonl(&text),
+            Err(e) => vec![e.to_string()],
         };
         if errors.is_empty() {
-            println!("{path} : OK");
+            println!("{path_name} : OK");
         }
         for e in &errors {
-            println!("{path} : {e}");
+            println!("{path_name} : {e}");
         }
         failures += errors.len();
     }
-    if failures > 0 {
-        std::process::exit(1);
+    if failures == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 
 fn check_jsonl(text: &str) -> Vec<String> {
-    let (games, skipped) = parse_jsonl(text);
-    let mut errors: Vec<String> = skipped
-        .into_iter()
-        .map(|(line, e)| format!("ligne {line} ignoree : {e}"))
-        .collect();
-    for g in &games {
-        if let Err(e) = g.result.validate() {
-            errors.push(format!("partie {} : {e}", g.id));
-        }
-    }
-    eprintln!("{} partie(s) lue(s)", games.len());
-    errors
+    let jsonl = Jsonl::parse(text);
+    eprintln!("{} partie(s) lue(s)", jsonl.games.len());
+    let skipped = jsonl
+        .skipped
+        .iter()
+        .map(|s| format!("ligne {} ignorée : {}", s.line, s.reason));
+    let invalid = jsonl
+        .games
+        .iter()
+        .filter_map(|g| g.result.validate().err().map(|e| format!("partie {} : {e}", g.id)));
+    skipped.chain(invalid).collect()
 }
 
-/// Format : `BOARDGAME 1`, `rows=`, `cols=`, `start=`, `current=`, `moves=n`, puis n coups.
 fn check_save(text: &str) -> Vec<String> {
+    match replay_save(text) {
+        Ok((count, replay)) => {
+            let status = replay
+                .winner
+                .map_or_else(|| "en cours".into(), |w| format!("gagnant {w}"));
+            eprintln!("{count} coups, {status}");
+            vec![]
+        }
+        Err(e) => vec![e.to_string()],
+    }
+}
+
+fn replay_save(text: &str) -> Result<(usize, Replay), CheckError> {
+    let moves = parse_save(text)?;
+    let replay = Replay::from_notation(moves.iter().copied())?;
+    Ok((moves.len(), replay))
+}
+
+#[derive(Debug, Error)]
+enum CheckError {
+    #[error(transparent)]
+    Save(#[from] SaveError),
+    #[error(transparent)]
+    Replay(#[from] ReplayError),
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+enum SaveError {
+    #[error("plateau non géré : {0}")]
+    UnsupportedBoard(String),
+    #[error("en-tête moves= introuvable")]
+    MissingCount,
+    #[error("{declared} coups annoncés, {found} lus")]
+    CountMismatch { declared: usize, found: usize },
+}
+
+/// Coups d'une sauvegarde : `BOARDGAME 1`, `rows=`, `cols=`, `start=`, `current=`, `moves=n`, puis
+/// n coups.
+fn parse_save(text: &str) -> Result<Vec<&str>, SaveError> {
     let mut lines = text.lines().map(str::trim);
     let mut declared = None;
     for line in lines.by_ref() {
@@ -64,23 +107,38 @@ fn check_save(text: &str) -> Vec<String> {
             declared = n.parse::<usize>().ok();
             break;
         }
-        if line.starts_with("rows=") && line != "rows=12" || line.starts_with("cols=") && line != "cols=12" {
-            return vec![format!("plateau non gere : {line}")];
+        let size = line.strip_prefix("rows=").or_else(|| line.strip_prefix("cols="));
+        if size.is_some_and(|s| s != "12") {
+            return Err(SaveError::UnsupportedBoard(line.to_string()));
         }
     }
-    let Some(n) = declared else {
-        return vec!["entete moves= introuvable".into()];
-    };
+    let declared = declared.ok_or(SaveError::MissingCount)?;
     let moves: Vec<&str> = lines.filter(|l| !l.is_empty()).collect();
-    if moves.len() != n {
-        return vec![format!("{n} coups annonces, {} lus", moves.len())];
+    if moves.len() != declared {
+        return Err(SaveError::CountMismatch {
+            declared,
+            found: moves.len(),
+        });
     }
-    match rules::replay(moves.iter().copied()) {
-        Ok((_, _, winner)) => {
-            let status = winner.map_or("en cours".to_string(), |w| format!("gagnant {}", w.name()));
-            eprintln!("{n} coups, {status}");
-            vec![]
-        }
-        Err((i, m)) => vec![format!("coup {} illegal : {m}", i + 1)],
+    Ok(moves)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_header_is_checked() {
+        let save = "BOARDGAME 1\nrows=12\ncols=12\nmoves=2\nG1-G4-F9\nF12-F10-G7\n";
+        assert_eq!(parse_save(save), Ok(vec!["G1-G4-F9", "F12-F10-G7"]));
+        assert_eq!(
+            parse_save("BOARDGAME 1\nrows=8\nmoves=0\n"),
+            Err(SaveError::UnsupportedBoard("rows=8".into()))
+        );
+        assert_eq!(parse_save("BOARDGAME 1\n"), Err(SaveError::MissingCount));
+        assert_eq!(
+            parse_save("BOARDGAME 1\nmoves=3\nG1-G4-F9\n"),
+            Err(SaveError::CountMismatch { declared: 3, found: 1 })
+        );
     }
 }

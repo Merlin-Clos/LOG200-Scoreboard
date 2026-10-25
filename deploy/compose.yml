@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./ladder.toml:/srv/ladder.toml:ro
-      - ./jars:/srv/jars:ro
+      - ./jars:/srv/jars
       - ./data:/srv/data
       - site:/srv/site
       - docker:/var/lib/docker

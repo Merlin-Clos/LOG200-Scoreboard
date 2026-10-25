@@ -1,34 +1,98 @@
-//! isolation-bot : adversaire de test pour le ladder et outil de conformance. Il verifie chaque coup
-//! adverse et la fin de partie avec notre moteur. Avec `--probe-illegal`, il envoie d'abord a chaque
-//! tour un coup que notre moteur refuse : si le serveur l'accepte, nos regles different des siennes.
-//!
-//! Usage : isolation-bot [--host 127.0.0.1] [--port 8888] [--strategy random|greedy] [--seed N]
-//!                       [--probe-illegal] [--connect-timeout-ms 30000] [--verbose]
+//! Adversaire de test pour le ladder et outil de conformance : chaque coup adverse et chaque fin de
+//! partie annoncée sont vérifiés avec notre moteur.
 
-use std::collections::HashSet;
+mod probe;
+
+use std::fmt;
 use std::net::TcpStream;
+use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use isolation::board::{Board, Color, DIRS, Move};
-use isolation::cli::{Args, die};
-use isolation::protocol::{LineConn, RecvError, ServerMsg};
-use isolation::rules::{self, destinations};
-use isolation::strategy::{self, Strategy};
+use anyhow::{Context, bail};
+use clap::Parser;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
-const CATEGORIES: [&str; 3] = ["arrival", "distance", "jump"];
+use isolation::board::{Board, Color, Move, SIZE};
+use isolation::protocol::{LineConn, Outcome, RecvError, ServerMsg};
+use isolation::rules;
+use isolation::strategy::Strategy;
 
-struct Game {
-    board: Board,
-    color: Color,
-    /// Dernier coup envoye, en attente de verdict (`4` = refuse, `3`/`5` = accepte).
-    pending: Option<Move>,
-    pending_is_probe: Option<&'static str>,
-    /// Dernier coup a nous accepte par le serveur.
-    last_own: Option<Move>,
-    probed_this_turn: bool,
-    turn: usize,
+use probe::ProbeKind;
+
+#[derive(Parser)]
+#[command(
+    name = "isolation-bot",
+    version,
+    about = "Client de test et de conformance pour Isolation"
+)]
+struct Cli {
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+    #[arg(long, default_value_t = 8888)]
+    port: u16,
+    #[arg(long, value_enum, default_value_t = Strategy::Greedy)]
+    strategy: Strategy,
+    /// Graine du hasard, pour rejouer une partie à l'identique.
+    #[arg(long)]
+    seed: Option<u64>,
+    /// Envoie d'abord, à chaque tour, un coup que notre moteur refuse.
+    #[arg(long)]
+    probe_illegal: bool,
+    #[arg(long, default_value_t = 30_000)]
+    connect_timeout_ms: u64,
+    /// Affiche les messages échangés.
+    #[arg(long)]
+    verbose: bool,
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match run(&cli) {
+        Ok(report) => {
+            eprint!("{report}");
+            if report.is_clean() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        Err(e) => {
+            eprintln!("erreur : {e:#}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn run(cli: &Cli) -> anyhow::Result<Report> {
+    let rng = cli.seed.map_or_else(rand::make_rng, StdRng::seed_from_u64);
+    let conn = connect(&cli.host, cli.port, Duration::from_millis(cli.connect_timeout_ms))?;
+    let mut client = Client {
+        player: Player {
+            conn,
+            strategy: cli.strategy,
+            rng,
+            probe: cli.probe_illegal,
+            verbose: cli.verbose,
+        },
+        report: Report::default(),
+        game: None,
+    };
+    client.run()?;
+    Ok(client.report)
+}
+
+fn connect(host: &str, port: u16, timeout: Duration) -> anyhow::Result<LineConn> {
+    let start = Instant::now();
+    loop {
+        match TcpStream::connect((host, port)) {
+            Ok(stream) => return LineConn::new(stream).context("socket"),
+            Err(e) if start.elapsed() > timeout => {
+                return Err(e).with_context(|| format!("connexion à {host}:{port}"));
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -40,135 +104,67 @@ struct Report {
     probes_accepted: Vec<String>,
 }
 
-fn main() {
-    let args = Args::from_env();
-    let host = args.get("--host").unwrap_or("127.0.0.1").to_string();
-    let port: u16 = args.parse("--port", 8888);
-    let strategy: Strategy = args
-        .get("--strategy")
-        .unwrap_or("greedy")
-        .parse()
-        .unwrap_or_else(|e: String| die(&e));
-    let mut rng = match args.get("--seed") {
-        Some(s) => StdRng::seed_from_u64(s.parse().unwrap_or_else(|_| die("--seed invalide"))),
-        None => StdRng::from_os_rng(),
-    };
-    let probe = args.flag("--probe-illegal");
-    let verbose = args.flag("--verbose");
-    let connect_timeout = Duration::from_millis(args.parse("--connect-timeout-ms", 30_000));
-
-    let mut conn = connect(&host, port, connect_timeout);
-    let mut report = Report::default();
-    let mut game: Option<Game> = None;
-
-    loop {
-        let line = match conn.recv(None) {
-            Ok(l) => l,
-            Err(RecvError::Closed) => break,
-            Err(e) => die(&format!("lecture : {e:?}")),
-        };
-        if verbose {
-            eprintln!("<- {}", abbreviate(&line));
-        }
-        let msg = match ServerMsg::decode(&line) {
-            Ok(m) => m,
-            Err(e) => {
-                report.mismatches.push(format!("message illisible : {e}"));
-                continue;
-            }
-        };
-        match msg {
-            ServerMsg::NewGame {
-                rows,
-                cols,
-                time_ms,
-                color,
-            } => {
-                if (rows, cols) != (12, 12) {
-                    die(&format!("plateau {rows}x{cols} non gere"));
-                }
-                eprintln!("nouvelle partie : {} , {time_ms} ms", color.name());
-                game = Some(Game {
-                    board: Board::initial(),
-                    color,
-                    pending: None,
-                    pending_is_probe: None,
-                    last_own: None,
-                    probed_this_turn: false,
-                    turn: 0,
-                });
-            }
-            ServerMsg::Board { color, board } => {
-                let g = game.as_mut().unwrap_or_else(|| die("plateau recu avant le message 0"));
-                g.board = board;
-                if color == Color::Red {
-                    g.new_turn();
-                    g.play(&mut conn, strategy, &mut rng, probe, verbose, &mut report);
-                }
-            }
-            ServerMsg::Request(opp) => {
-                let g = game.as_mut().unwrap_or_else(|| die("demande de coup hors partie"));
-                g.settle(&mut report);
-                if let Some(m) = opp {
-                    g.opponent_move(m, &mut report);
-                }
-                g.new_turn();
-                g.play(&mut conn, strategy, &mut rng, probe, verbose, &mut report);
-            }
-            ServerMsg::Invalid => {
-                let g = game.as_mut().unwrap_or_else(|| die("4 hors partie"));
-                match (g.pending.take(), g.pending_is_probe.take()) {
-                    (Some(_), Some(_)) => report.probes_rejected += 1,
-                    (m, _) => report
-                        .mismatches
-                        .push(format!("notre coup {m:?} refuse par le serveur")),
-                }
-                g.play(&mut conn, strategy, &mut rng, probe, verbose, &mut report);
-            }
-            ServerMsg::End { result, last } => {
-                let Some(mut g) = game.take() else {
-                    die("fin de partie hors partie");
-                };
-                g.settle(&mut report);
-                if let Some(m) = last
-                    && Some(m) != g.last_own
-                {
-                    g.opponent_move(m, &mut report);
-                }
-                g.check_end(&result, &mut report);
-                report.games += 1;
-                eprintln!("fin : {result} ({} coups detruits)", g.board.destroyed());
-            }
-        }
+impl Report {
+    fn mismatch(&mut self, what: String) {
+        self.mismatches.push(what);
     }
 
-    eprintln!(
-        "bilan : {} partie(s), {} coups adverses verifies, {} divergence(s), sondes refusees {} / acceptees {}",
-        report.games,
-        report.checked,
-        report.mismatches.len(),
-        report.probes_rejected,
-        report.probes_accepted.len()
-    );
-    for m in report.mismatches.iter().chain(&report.probes_accepted) {
-        eprintln!("  DIVERGENCE {m}");
-    }
-    if !report.mismatches.is_empty() || !report.probes_accepted.is_empty() {
-        std::process::exit(1);
+    fn is_clean(&self) -> bool {
+        self.mismatches.is_empty() && self.probes_accepted.is_empty()
     }
 }
 
+impl fmt::Display for Report {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(
+            f,
+            "bilan : {} partie(s), {} coups adverses vérifiés, {} divergence(s), sondes refusées {} / acceptées {}",
+            self.games,
+            self.checked,
+            self.mismatches.len(),
+            self.probes_rejected,
+            self.probes_accepted.len()
+        )?;
+        self.mismatches
+            .iter()
+            .chain(&self.probes_accepted)
+            .try_for_each(|m| writeln!(f, "  DIVERGENCE {m}"))
+    }
+}
+
+/// Notre coup envoyé, en attente de verdict : `4` le refuse, `3` ou `5` l'accepte.
+enum Pending {
+    Move(Move),
+    Probe(Move, ProbeKind),
+}
+
+impl Pending {
+    const fn mv(&self) -> Move {
+        match *self {
+            Self::Move(mv) | Self::Probe(mv, _) => mv,
+        }
+    }
+}
+
+struct Game {
+    board: Board,
+    color: Color,
+    pending: Option<Pending>,
+    /// Le `5` final peut répéter notre dernier coup : il ne faut pas le rejouer.
+    last_own: Option<Move>,
+    probed_this_turn: bool,
+    turn: usize,
+}
+
 impl Game {
-    /// Un `3` ou un `5` confirme que notre dernier coup a ete accepte.
-    fn settle(&mut self, report: &mut Report) {
-        if let Some(m) = self.pending.take() {
-            if let Some(cat) = self.pending_is_probe.take() {
-                report
-                    .probes_accepted
-                    .push(format!("sonde {cat} acceptee : {m}\n{}", self.board));
-            }
-            self.board.apply(m);
-            self.last_own = Some(m);
+    fn new(color: Color) -> Self {
+        Self {
+            board: Board::initial(),
+            color,
+            pending: None,
+            last_own: None,
+            probed_this_turn: false,
+            turn: 0,
         }
     }
 
@@ -177,145 +173,173 @@ impl Game {
         self.probed_this_turn = false;
     }
 
-    fn opponent_move(&mut self, m: Move, report: &mut Report) {
-        let opp = self.color.other();
-        report.checked += 1;
-        if !rules::is_legal(&self.board, opp, m) {
-            report
-                .mismatches
-                .push(format!("coup adverse juge illegal : {m}\n{}", self.board));
-        }
-        self.board.apply(m);
-    }
-
-    fn check_end(&self, result: &str, report: &mut Report) {
-        let expected = match result {
-            "WIN" => !rules::has_moves(&self.board, self.color.other()),
-            "LOSS" => !rules::has_moves(&self.board, self.color),
-            "TIMEOUT" => true,
-            other => {
-                report.mismatches.push(format!("resultat inattendu : {other}"));
-                return;
-            }
-        };
-        if !expected {
-            report
-                .mismatches
-                .push(format!("fin {result} non confirmee par notre moteur\n{}", self.board));
-        }
-    }
-
-    /// Envoie une sonde (une fois par tour) ou notre coup. Un coup reel refuse est renvoye a
-    /// l'identique : c'est une divergence, et le serveur finira par declarer un timeout.
-    fn play(
-        &mut self,
-        conn: &mut LineConn,
-        strategy: Strategy,
-        rng: &mut StdRng,
-        probe: bool,
-        verbose: bool,
-        report: &mut Report,
-    ) {
-        if probe && !self.probed_this_turn {
-            self.probed_this_turn = true;
-            if let Some((m, cat)) = pick_probe(&self.board, self.color, self.turn) {
-                self.send(conn, m, verbose);
-                self.pending_is_probe = Some(cat);
-                return;
-            }
-        }
-        let Some(m) = strategy::choose(strategy, &self.board, self.color, rng) else {
-            report
-                .mismatches
-                .push(format!("demande de coup sans coup legal\n{}", self.board));
+    /// Le serveur a accepté le coup en attente.
+    fn settle(&mut self, report: &mut Report) {
+        let Some(pending) = self.pending.take() else {
             return;
         };
-        self.send(conn, m, verbose);
+        let mv = pending.mv();
+        if let Pending::Probe(_, kind) = pending {
+            report
+                .probes_accepted
+                .push(format!("sonde {kind} acceptée : {mv}\n{}", self.board));
+        }
+        self.board.apply(mv);
+        self.last_own = Some(mv);
     }
 
-    fn send(&mut self, conn: &mut LineConn, m: Move, verbose: bool) {
-        let text = m.to_string();
-        if verbose {
-            eprintln!("-> {text}");
+    fn opponent_move(&mut self, mv: Move, report: &mut Report) {
+        report.checked += 1;
+        if !rules::is_legal(&self.board, self.color.other(), mv) {
+            report.mismatch(format!("coup adverse jugé illégal : {mv}\n{}", self.board));
         }
-        conn.send(&text).unwrap_or_else(|e| die(&format!("envoi : {e}")));
-        self.pending = Some(m);
+        self.board.apply(mv);
+    }
+
+    fn check_end(&self, outcome: Outcome, report: &mut Report) {
+        let confirmed = match outcome {
+            Outcome::Win => !rules::has_moves(&self.board, self.color.other()),
+            Outcome::Loss => !rules::has_moves(&self.board, self.color),
+            Outcome::Timeout => true,
+        };
+        if !confirmed {
+            report.mismatch(format!("fin {outcome} non confirmée par notre moteur\n{}", self.board));
+        }
     }
 }
 
-/// Coups que notre moteur refuse, classes par regle testee :
-/// - `arrival` : detruire sa propre case d'arrivee
-/// - `distance` : cible a une distance du pion adverse que la phase (ou le repli) n'autorise pas
-/// - `jump` : passer par-dessus le pion adverse
-fn pick_probe(b: &Board, c: Color, turn: usize) -> Option<(Move, &'static str)> {
-    let legal: HashSet<Move> = rules::legal_moves(b, c).into_iter().collect();
-    let from = b.pawn(c);
-    let opp = b.pawn(c.other());
-    let mut by_cat: [Vec<Move>; 3] = Default::default();
-    destinations(b, from, |to| {
-        by_cat[0].push(Move {
-            from,
-            to,
-            destroyed: to,
-        });
-        for (dx, dy) in DIRS {
-            for k in 1..=3 {
-                if let Some(t) = opp.offset(dx * k, dy * k)
-                    && t != to
-                    && (t == from || b.is_empty(t))
-                {
-                    by_cat[1].push(Move { from, to, destroyed: t });
+struct Player {
+    conn: LineConn,
+    strategy: Strategy,
+    rng: StdRng,
+    probe: bool,
+    verbose: bool,
+}
+
+impl Player {
+    /// Une sonde au plus par tour, puis notre coup. Si le serveur refuse un vrai coup, c'est une
+    /// divergence : on rejoue, et le serveur finira par déclarer un timeout.
+    fn play(&mut self, game: &mut Game, report: &mut Report) -> anyhow::Result<()> {
+        if self.probe && !game.probed_this_turn {
+            game.probed_this_turn = true;
+            if let Some((mv, kind)) = probe::pick(&game.board, game.color, game.turn) {
+                return self.send(game, Pending::Probe(mv, kind));
+            }
+        }
+        let Some(mv) = self.strategy.choose(&game.board, game.color, &mut self.rng) else {
+            report.mismatch(format!("demande de coup sans coup légal\n{}", game.board));
+            return Ok(());
+        };
+        self.send(game, Pending::Move(mv))
+    }
+
+    fn send(&mut self, game: &mut Game, pending: Pending) -> anyhow::Result<()> {
+        let mv = pending.mv();
+        if self.verbose {
+            eprintln!("-> {mv}");
+        }
+        self.conn.send(mv).context("envoi")?;
+        game.pending = Some(pending);
+        Ok(())
+    }
+}
+
+struct Client {
+    player: Player,
+    report: Report,
+    game: Option<Game>,
+}
+
+impl Client {
+    fn run(&mut self) -> anyhow::Result<()> {
+        loop {
+            let line = match self.player.conn.recv(None) {
+                Ok(line) => line,
+                Err(RecvError::Closed) => return Ok(()),
+                Err(e) => return Err(e).context("lecture"),
+            };
+            if self.player.verbose {
+                eprintln!("<- {}", abbreviate(&line));
+            }
+            match line.parse() {
+                Ok(msg) => self.handle(msg)?,
+                Err(e) => self.report.mismatch(format!("message illisible : {e}")),
+            }
+        }
+    }
+
+    fn handle(&mut self, msg: ServerMsg) -> anyhow::Result<()> {
+        match msg {
+            ServerMsg::NewGame {
+                rows,
+                cols,
+                time_ms,
+                color,
+            } => {
+                if (rows, cols) != (SIZE.into(), SIZE.into()) {
+                    bail!("plateau {rows}x{cols} non géré");
+                }
+                eprintln!("nouvelle partie : {color}, {time_ms} ms");
+                self.game = Some(Game::new(color));
+            }
+            ServerMsg::Board { color, board } => {
+                let game = self.game.as_mut().context("plateau reçu avant le message 0")?;
+                game.board = board;
+                if color == Color::Red {
+                    game.new_turn();
+                    self.player.play(game, &mut self.report)?;
                 }
             }
-        }
-    });
-    let target = legal.iter().next().map(|m| m.destroyed);
-    for (dx, dy) in DIRS {
-        let mut cur = from;
-        let mut jumped = false;
-        for _ in 0..3 {
-            let Some(next) = cur.offset(dx, dy) else { break };
-            cur = next;
-            if next == opp {
-                jumped = true;
-                continue;
+            ServerMsg::Request(opponent) => {
+                let game = self.game.as_mut().context("demande de coup hors partie")?;
+                game.settle(&mut self.report);
+                if let Some(mv) = opponent {
+                    game.opponent_move(mv, &mut self.report);
+                }
+                game.new_turn();
+                self.player.play(game, &mut self.report)?;
             }
-            if !b.is_empty(next) {
-                break;
+            ServerMsg::Invalid => {
+                let game = self.game.as_mut().context("4 hors partie")?;
+                match game.pending.take() {
+                    Some(Pending::Probe(..)) => self.report.probes_rejected += 1,
+                    Some(Pending::Move(mv)) => self.report.mismatch(format!("notre coup {mv} refusé par le serveur")),
+                    None => self.report.mismatch("4 reçu sans coup en attente".into()),
+                }
+                self.player.play(game, &mut self.report)?;
             }
-            if jumped && let Some(t) = target.filter(|&t| t != next) {
-                by_cat[2].push(Move {
-                    from,
-                    to: next,
-                    destroyed: t,
-                });
+            ServerMsg::End { outcome, last } => {
+                let mut game = self.game.take().context("fin de partie hors partie")?;
+                game.settle(&mut self.report);
+                if let Some(mv) = last
+                    && Some(mv) != game.last_own
+                {
+                    game.opponent_move(mv, &mut self.report);
+                }
+                game.check_end(outcome, &mut self.report);
+                self.report.games += 1;
+                eprintln!("fin : {outcome} ({} cases détruites)", game.board.destroyed());
             }
         }
-    }
-    for cat in &mut by_cat {
-        cat.retain(|m| !legal.contains(m));
-    }
-    (0..CATEGORIES.len())
-        .map(|i| (turn + i) % CATEGORIES.len())
-        .find(|&i| !by_cat[i].is_empty())
-        .map(|i| (by_cat[i][turn % by_cat[i].len()], CATEGORIES[i]))
-}
-
-fn connect(host: &str, port: u16, timeout: Duration) -> LineConn {
-    let start = Instant::now();
-    loop {
-        match TcpStream::connect((host, port)) {
-            Ok(s) => return LineConn::new(s).unwrap_or_else(|e| die(&format!("socket : {e}"))),
-            Err(e) if start.elapsed() > timeout => die(&format!("connexion a {host}:{port} : {e}")),
-            Err(_) => std::thread::sleep(Duration::from_millis(100)),
-        }
+        Ok(())
     }
 }
 
 fn abbreviate(line: &str) -> String {
-    if line.len() > 60 {
-        format!("{}...", &line[..60])
-    } else {
-        line.to_string()
+    match line.char_indices().nth(60) {
+        Some((cut, _)) => format!("{}...", &line[..cut]),
+        None => line.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn abbreviate_cuts_on_char_boundaries() {
+        let line = "é".repeat(70);
+        assert_eq!(abbreviate(&line), format!("{}...", "é".repeat(60)));
+        assert_eq!(abbreviate("court"), "court");
     }
 }

@@ -1,16 +1,22 @@
-//! Regles du serveur officiel, detaillees dans docs/rules.md. Le point facile a rater : le repli de
-//! distance (3, puis 2, puis 1) porte sur l'ensemble des coups possibles, pas sur chaque deplacement.
+//! Règles du serveur officiel, détaillées dans docs/rules.md.
+
+use std::ops::RangeInclusive;
+
+use rand::Rng;
+use rand::seq::IndexedRandom;
+use thiserror::Error;
 
 use crate::board::{Board, Color, DIRS, Move, Square};
 
-pub fn destinations(b: &Board, from: Square, mut f: impl FnMut(Square)) {
+/// Cases atteignables depuis `from` : jusqu'à 3 pas en ligne droite, sans traverser d'obstacle.
+pub fn destinations(board: &Board, from: Square, mut visit: impl FnMut(Square)) {
     for (dx, dy) in DIRS {
-        let mut cur = from;
+        let mut current = from;
         for _ in 0..3 {
-            match cur.offset(dx, dy) {
-                Some(next) if b.is_empty(next) => {
-                    cur = next;
-                    f(cur);
+            match current.offset(dx, dy) {
+                Some(next) if board.is_empty(next) => {
+                    current = next;
+                    visit(current);
                 }
                 _ => break,
             }
@@ -19,132 +25,195 @@ pub fn destinations(b: &Board, from: Square, mut f: impl FnMut(Square)) {
 }
 
 /// Nombre de cases atteignables, sans tenir compte de la contrainte de destruction.
-pub fn mobility(b: &Board, c: Color) -> i32 {
-    let mut n = 0;
-    destinations(b, b.pawn(c), |_| n += 1);
-    n
+pub fn mobility(board: &Board, color: Color) -> i32 {
+    let mut count = 0;
+    destinations(board, board.pawn(color), |_| count += 1);
+    count
 }
 
-fn generate_at(b: &Board, from: Square, opp: Square, kmin: i8, kmax: i8, out: &mut Vec<Move>) {
-    destinations(b, from, |to| {
+/// Distances au pion adverse où détruire, par ordre de repli. Le repli s'applique à l'ensemble
+/// des coups : on garde le premier anneau qui en donne au moins un.
+fn destroy_rings(destroyed: u32) -> &'static [RangeInclusive<i8>] {
+    const EARLY: &[RangeInclusive<i8>] = &[3..=3, 2..=2, 1..=1];
+    const MIDDLE: &[RangeInclusive<i8>] = &[2..=2, 1..=1];
+    #[expect(clippy::single_range_in_vec_init, reason = "un seul anneau, de 1 à 2")]
+    const LATE: &[RangeInclusive<i8>] = &[1..=2];
+    match destroyed {
+        0..10 => EARLY,
+        10..20 => MIDDLE,
+        _ => LATE,
+    }
+}
+
+fn push_moves(board: &Board, from: Square, opponent: Square, ring: RangeInclusive<i8>, out: &mut Vec<Move>) {
+    destinations(board, from, |to| {
         for (dx, dy) in DIRS {
-            for k in kmin..=kmax {
-                let Some(t) = opp.offset(dx * k, dy * k) else {
+            for k in ring.clone() {
+                let Some(target) = opponent.offset(dx * k, dy * k) else {
                     break;
                 };
-                if t != to && (t == from || b.is_empty(t)) {
-                    out.push(Move { from, to, destroyed: t });
+                if target != to && (target == from || board.is_empty(target)) {
+                    out.push(Move {
+                        from,
+                        to,
+                        destroyed: target,
+                    });
                 }
             }
         }
     });
 }
 
-/// Remplace le contenu de `out` par les coups legaux de `c`.
-pub fn generate(b: &Board, c: Color, out: &mut Vec<Move>) {
+/// Remplace le contenu de `out`, pour réutiliser son allocation.
+pub fn generate(board: &Board, color: Color, out: &mut Vec<Move>) {
     out.clear();
-    let from = b.pawn(c);
-    let opp = b.pawn(c.other());
-    let n = b.destroyed();
-    if n < 10 {
-        for k in [3, 2, 1] {
-            generate_at(b, from, opp, k, k, out);
-            if !out.is_empty() {
-                return;
-            }
+    let from = board.pawn(color);
+    let opponent = board.pawn(color.other());
+    for ring in destroy_rings(board.destroyed()) {
+        push_moves(board, from, opponent, ring.clone(), out);
+        if !out.is_empty() {
+            return;
         }
-    } else if n < 20 {
-        for k in [2, 1] {
-            generate_at(b, from, opp, k, k, out);
-            if !out.is_empty() {
-                return;
-            }
-        }
-    } else {
-        generate_at(b, from, opp, 1, 2, out);
     }
 }
 
-pub fn legal_moves(b: &Board, c: Color) -> Vec<Move> {
-    let mut out = Vec::new();
-    generate(b, c, &mut out);
-    out
+pub fn legal_moves(board: &Board, color: Color) -> Vec<Move> {
+    let mut moves = Vec::new();
+    generate(board, color, &mut moves);
+    moves
 }
 
-pub fn is_legal(b: &Board, c: Color, m: Move) -> bool {
-    m.from == b.pawn(c) && legal_moves(b, c).contains(&m)
+pub fn is_legal(board: &Board, color: Color, mv: Move) -> bool {
+    mv.from == board.pawn(color) && legal_moves(board, color).contains(&mv)
 }
 
-pub fn has_moves(b: &Board, c: Color) -> bool {
-    !legal_moves(b, c).is_empty()
+pub fn has_moves(board: &Board, color: Color) -> bool {
+    !legal_moves(board, color).is_empty()
 }
 
-/// Apres un coup de `mover` : gagnant si l'adversaire n'a plus aucun coup complet.
-/// Il n'y a pas de partie nulle en Isolation.
-pub fn winner_after(b: &Board, mover: Color) -> Option<Color> {
-    (!has_moves(b, mover.other())).then_some(mover)
+/// Après un coup de `mover`, il gagne si l'adversaire n'a plus aucun coup : pas de nulle.
+pub fn winner_after(board: &Board, mover: Color) -> Option<Color> {
+    (!has_moves(board, mover.other())).then_some(mover)
 }
 
-/// Rejoue une suite de coups depuis le plateau initial, rouge en premier. Retourne le plateau
-/// final, la couleur au trait et le gagnant si la partie s'est terminee sur le dernier coup.
-/// Erreur : index et texte du premier coup illisible, illegal ou joue apres la fin.
-pub fn replay<'a>(moves: impl IntoIterator<Item = &'a str>) -> Result<(Board, Color, Option<Color>), (usize, String)> {
-    let mut b = Board::initial();
+/// `plies` demi-coups légaux tirés au hasard depuis le plateau initial.
+pub fn random_opening(plies: usize, rng: &mut impl Rng) -> Vec<Move> {
+    let mut board = Board::initial();
     let mut turn = Color::Red;
-    let mut winner = None;
-    for (i, text) in moves.into_iter().enumerate() {
-        let m = crate::notation::parse_move(text)
-            .filter(|&m| winner.is_none() && is_legal(&b, turn, m))
-            .ok_or((i, text.to_string()))?;
-        b.apply(m);
-        winner = winner_after(&b, turn);
+    let mut opening = Vec::with_capacity(plies);
+    for _ in 0..plies {
+        let Some(&mv) = legal_moves(&board, turn).choose(rng) else {
+            break;
+        };
+        board.apply(mv);
+        opening.push(mv);
         turn = turn.other();
     }
-    Ok((b, turn, winner))
+    opening
+}
+
+/// Les numéros de coup des messages commencent à 1.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ReplayError {
+    #[error("coup {} illisible : {text:?}", .index + 1)]
+    Unreadable { index: usize, text: String },
+    #[error("coup {} illégal : {mv}", .index + 1)]
+    Illegal { index: usize, mv: Move },
+    #[error("coup {} joué après la fin de la partie : {mv}", .index + 1)]
+    AfterEnd { index: usize, mv: Move },
+}
+
+impl ReplayError {
+    /// Position du coup fautif, à partir de 0.
+    pub const fn index(&self) -> usize {
+        match self {
+            Self::Unreadable { index, .. } | Self::Illegal { index, .. } | Self::AfterEnd { index, .. } => *index,
+        }
+    }
+}
+
+/// Partie rejouée depuis le plateau initial, rouge en premier.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Replay {
+    pub board: Board,
+    pub turn: Color,
+    /// Renseigné si le dernier coup a terminé la partie.
+    pub winner: Option<Color>,
+}
+
+impl Default for Replay {
+    fn default() -> Self {
+        Self {
+            board: Board::initial(),
+            turn: Color::Red,
+            winner: None,
+        }
+    }
+}
+
+impl Replay {
+    pub fn from_moves(moves: impl IntoIterator<Item = Move>) -> Result<Self, ReplayError> {
+        let mut replay = Self::default();
+        for (index, mv) in moves.into_iter().enumerate() {
+            replay.play(index, mv)?;
+        }
+        Ok(replay)
+    }
+
+    pub fn from_notation<'a>(moves: impl IntoIterator<Item = &'a str>) -> Result<Self, ReplayError> {
+        let mut replay = Self::default();
+        for (index, text) in moves.into_iter().enumerate() {
+            let mv = text.parse().map_err(|_| ReplayError::Unreadable {
+                index,
+                text: text.to_string(),
+            })?;
+            replay.play(index, mv)?;
+        }
+        Ok(replay)
+    }
+
+    fn play(&mut self, index: usize, mv: Move) -> Result<(), ReplayError> {
+        if self.winner.is_some() {
+            return Err(ReplayError::AfterEnd { index, mv });
+        }
+        if !is_legal(&self.board, self.turn, mv) {
+            return Err(ReplayError::Illegal { index, mv });
+        }
+        self.board.apply(mv);
+        self.winner = winner_after(&self.board, self.turn);
+        self.turn = self.turn.other();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
-    use super::*;
-    use crate::board::{BLACK, DESTROYED, EMPTY, RED};
-    use crate::notation::parse_square;
+mod tests {
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
 
-    /// Plateau depuis un schema de 12 lignes (ligne 12 en premier) : `.` vide, `#` detruite,
-    /// `R` rouge, `B` noir. Les espaces sont ignores.
-    pub fn diagram(s: &str) -> Board {
-        let cells: Vec<u8> = s
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .map(|c| match c {
-                '.' => EMPTY,
-                '#' => DESTROYED,
-                'R' => RED,
-                'B' => BLACK,
-                _ => panic!("caractere {c:?}"),
-            })
-            .collect();
-        Board::from_cells(&cells).unwrap()
-    }
+    use super::*;
+    use crate::board::Cell;
+    use crate::board::test_support::diagram;
 
     fn sq(s: &str) -> Square {
-        parse_square(s).unwrap()
+        s.parse().unwrap()
     }
 
-    fn chebyshev_ray_distance(a: Square, b: Square) -> Option<i8> {
-        let (dx, dy) = ((b.x - a.x).abs(), (b.y - a.y).abs());
+    fn ray_distance(a: Square, b: Square) -> Option<u8> {
+        let (dx, dy) = (a.x().abs_diff(b.x()), a.y().abs_diff(b.y()));
         (dx == 0 || dy == 0 || dx == dy).then_some(dx.max(dy))
     }
 
     #[test]
     fn initial_red_moves_destroy_at_distance_three_from_black() {
-        let b = Board::initial();
-        let moves = legal_moves(&b, Color::Red);
+        let board = Board::initial();
+        let moves = legal_moves(&board, Color::Red);
         assert!(!moves.is_empty());
-        let black = b.pawn(Color::Black);
-        for m in &moves {
-            assert_eq!(chebyshev_ray_distance(black, m.destroyed), Some(3), "{m}");
+        let black = board.pawn(Color::Black);
+        for mv in &moves {
+            assert_eq!(ray_distance(black, mv.destroyed), Some(3), "{mv}");
         }
-        // F12 -> rayons a distance 3 : C12, I12, F9, C9, I9.
+        // F12 -> rayons à distance 3 : C12, I12, F9, C9, I9.
         let mut targets: Vec<String> = moves.iter().map(|m| m.destroyed.to_string()).collect();
         targets.sort();
         targets.dedup();
@@ -153,7 +222,7 @@ pub(crate) mod tests {
 
     #[test]
     fn opponent_pawn_blocks_movement() {
-        let b = diagram(
+        let board = diagram(
             "............
              ............
              ............
@@ -167,16 +236,18 @@ pub(crate) mod tests {
              ............
              RB..........",
         );
-        let moves = legal_moves(&b, Color::Red);
-        assert!(moves.iter().all(|m| m.to.y != 11), "deplacement horizontal a travers B");
+        let moves = legal_moves(&board, Color::Red);
+        assert!(
+            moves.iter().all(|m| m.to.y() != 11),
+            "déplacement horizontal à travers B"
+        );
     }
 
     #[test]
     fn fallback_is_global_not_per_move() {
-        // Noir en A12 : a distance 3 il ne reste que D9 (D12 et A9 sont detruites).
-        // Rouge peut atterrir en D9. Ce coup-la n'a aucune cible a 3, mais d'autres en ont, donc il
-        // est interdit.
-        let b = diagram(
+        // Noir en A12 : à distance 3, il ne reste que D9 (D12 et A9 sont détruites). Rouge peut
+        // atterrir en D9 ; ce coup-là n'a plus de cible à 3, mais d'autres en ont, donc il est interdit.
+        let board = diagram(
             "B..#........
              ............
              ............
@@ -190,7 +261,7 @@ pub(crate) mod tests {
              ............
              ............",
         );
-        let moves = legal_moves(&b, Color::Red);
+        let moves = legal_moves(&board, Color::Red);
         assert!(!moves.is_empty());
         assert!(moves.iter().all(|m| m.destroyed == sq("D9")));
         assert!(moves.iter().all(|m| m.to != sq("D9")));
@@ -198,7 +269,7 @@ pub(crate) mod tests {
 
     #[test]
     fn fallback_to_distance_two_when_no_distance_three_target() {
-        let b = diagram(
+        let board = diagram(
             "B..#........
              ............
              ............
@@ -212,18 +283,18 @@ pub(crate) mod tests {
              ............
              ............",
         );
-        let black = b.pawn(Color::Black);
-        let moves = legal_moves(&b, Color::Red);
+        let black = board.pawn(Color::Black);
+        let moves = legal_moves(&board, Color::Red);
         assert!(!moves.is_empty());
-        for m in &moves {
-            assert_eq!(chebyshev_ray_distance(black, m.destroyed), Some(2), "{m}");
+        for mv in &moves {
+            assert_eq!(ray_distance(black, mv.destroyed), Some(2), "{mv}");
         }
     }
 
     #[test]
     fn origin_square_is_destroyable_arrival_is_not() {
-        // Seule cible restante a distance 3 de A12 : D9, occupee par le rouge.
-        let b = diagram(
+        // Seule cible restante à distance 3 de A12 : D9, occupée par le rouge.
+        let board = diagram(
             "B..#........
              ............
              ............
@@ -237,15 +308,14 @@ pub(crate) mod tests {
              ............
              ............",
         );
-        let moves = legal_moves(&b, Color::Red);
+        let moves = legal_moves(&board, Color::Red);
         assert!(!moves.is_empty());
         assert!(moves.iter().all(|m| m.destroyed == m.from));
     }
 
     #[test]
     fn middle_phase_uses_distance_two() {
-        // 10 cases detruites loin des pions.
-        let b = diagram(
+        let board = diagram(
             "............
              ............
              ............
@@ -259,16 +329,16 @@ pub(crate) mod tests {
              ##########..
              ............",
         );
-        assert_eq!(b.destroyed(), 10);
-        let black = b.pawn(Color::Black);
-        for m in legal_moves(&b, Color::Red) {
-            assert_eq!(chebyshev_ray_distance(black, m.destroyed), Some(2), "{m}");
+        assert_eq!(board.destroyed(), 10);
+        let black = board.pawn(Color::Black);
+        for mv in legal_moves(&board, Color::Red) {
+            assert_eq!(ray_distance(black, mv.destroyed), Some(2), "{mv}");
         }
     }
 
     #[test]
     fn final_phase_allows_distance_one_and_two() {
-        let b = diagram(
+        let board = diagram(
             "............
              ............
              ............
@@ -282,21 +352,20 @@ pub(crate) mod tests {
              ############
              ....####....",
         );
-        assert_eq!(b.destroyed(), 20);
-        let black = b.pawn(Color::Black);
-        let moves = legal_moves(&b, Color::Red);
-        let mut dists: Vec<i8> = moves
+        assert_eq!(board.destroyed(), 20);
+        let black = board.pawn(Color::Black);
+        let mut distances: Vec<u8> = legal_moves(&board, Color::Red)
             .iter()
-            .map(|m| chebyshev_ray_distance(black, m.destroyed).unwrap())
+            .map(|m| ray_distance(black, m.destroyed).unwrap())
             .collect();
-        dists.sort();
-        dists.dedup();
-        assert_eq!(dists, [1, 2]);
+        distances.sort_unstable();
+        distances.dedup();
+        assert_eq!(distances, [1, 2]);
     }
 
     #[test]
     fn blocked_player_has_no_moves_and_loses() {
-        let b = diagram(
+        let board = diagram(
             "R#..........
              ##..........
              ............
@@ -310,30 +379,83 @@ pub(crate) mod tests {
              ............
              ...........B",
         );
-        assert!(!has_moves(&b, Color::Red));
-        assert_eq!(winner_after(&b, Color::Black), Some(Color::Black));
-        assert_eq!(winner_after(&b, Color::Red), None);
+        assert!(!has_moves(&board, Color::Red));
+        assert_eq!(winner_after(&board, Color::Black), Some(Color::Black));
+        assert_eq!(winner_after(&board, Color::Red), None);
     }
 
     #[test]
-    fn replay_rejects_illegal_and_reports_index() {
-        let b = Board::initial();
-        let first = legal_moves(&b, Color::Red)[0].to_string();
-        let (after, turn, winner) = replay([first.as_str()]).unwrap();
-        assert_eq!(after.destroyed(), 1);
-        assert_eq!(turn, Color::Black);
-        assert_eq!(winner, None);
-        // Rouge rejoue : le pion a bouger n'est plus le sien.
-        assert_eq!(replay([first.as_str(), first.as_str()]).unwrap_err().0, 1);
+    fn replay_reports_the_first_bad_move() {
+        let first = legal_moves(&Board::initial(), Color::Red)[0];
+        let replay = Replay::from_moves([first]).unwrap();
+        assert_eq!(replay.board.destroyed(), 1);
+        assert_eq!(replay.turn, Color::Black);
+        assert_eq!(replay.winner, None);
+        // Le rouge rejoue : le pion à bouger n'est plus le sien.
+        let err = Replay::from_moves([first, first]).unwrap_err();
+        assert_eq!(err, ReplayError::Illegal { index: 1, mv: first });
+        assert_eq!(err.to_string(), format!("coup 2 illégal : {first}"));
+        let text = first.to_string();
+        let err = Replay::from_notation([text.as_str(), "zz"]).unwrap_err();
+        assert_eq!(err.index(), 1);
+    }
+
+    #[test]
+    fn replay_rejects_moves_after_the_end() {
+        let mut board = diagram(
+            "B#..........
+             #...........
+             ............
+             ............
+             ............
+             ......R.....
+             ############
+             ############
+             ############
+             ............
+             ............
+             ............",
+        );
+        let winning = legal_moves(&board, Color::Red)
+            .into_iter()
+            .find(|&m| {
+                board.apply(m);
+                let won = winner_after(&board, Color::Red).is_some();
+                board.undo(m);
+                won
+            })
+            .unwrap();
+        let mut replay = Replay {
+            board,
+            ..Replay::default()
+        };
+        replay.play(0, winning).unwrap();
+        assert_eq!(replay.winner, Some(Color::Red));
+        assert!(matches!(
+            replay.play(1, winning),
+            Err(ReplayError::AfterEnd { index: 1, .. })
+        ));
     }
 
     #[test]
     fn is_legal_checks_owner_and_membership() {
-        let b = Board::initial();
-        let m = legal_moves(&b, Color::Red)[0];
-        assert!(is_legal(&b, Color::Red, m));
-        assert!(!is_legal(&b, Color::Black, m));
-        let bad = Move { destroyed: m.to, ..m };
-        assert!(!is_legal(&b, Color::Red, bad));
+        let board = Board::initial();
+        let mv = legal_moves(&board, Color::Red)[0];
+        assert!(is_legal(&board, Color::Red, mv));
+        assert!(!is_legal(&board, Color::Black, mv));
+        let bad = Move { destroyed: mv.to, ..mv };
+        assert!(!is_legal(&board, Color::Red, bad));
+    }
+
+    #[test]
+    fn random_opening_is_legal() {
+        let opening = random_opening(4, &mut StdRng::seed_from_u64(7));
+        assert_eq!(opening.len(), 4);
+        let replay = Replay::from_moves(opening).unwrap();
+        assert_eq!(replay.turn, Color::Red);
+        assert_eq!(
+            replay.board.cells().iter().filter(|&&c| c == Cell::Destroyed).count(),
+            4
+        );
     }
 }
