@@ -174,6 +174,7 @@ select {
     from {
         box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 70%, transparent);
     }
+
     to {
         box-shadow: 0 0 0 10px transparent;
     }
@@ -189,8 +190,7 @@ select {
     width: 100%;
     max-width: 1680px;
     margin: 0 auto;
-    padding: var(--gap) max(var(--gap), env(safe-area-inset-right)) max(var(--gap), env(safe-area-inset-bottom))
-        max(var(--gap), env(safe-area-inset-left));
+    padding: var(--gap) max(var(--gap), env(safe-area-inset-right)) max(var(--gap), env(safe-area-inset-bottom)) max(var(--gap), env(safe-area-inset-left));
 }
 
 .panel {
@@ -201,7 +201,7 @@ select {
     padding: 14px 16px;
 }
 
-.panel > h2 {
+.panel>h2 {
     margin-bottom: 10px;
 }
 
@@ -443,12 +443,12 @@ tbody tr:first-child .elo {
     white-space: nowrap;
 }
 
-.file input:focus-visible + .file-button {
+.file input:focus-visible+.file-button {
     outline: 2px solid var(--red);
     outline-offset: 2px;
 }
 
-.file input:hover + .file-button {
+.file input:hover+.file-button {
     border-color: var(--ink);
 }
 
@@ -474,7 +474,6 @@ tbody tr:first-child .elo {
     margin-top: 10px;
     font-size: 0.8125rem;
     color: var(--muted);
-    max-width: 75ch;
 }
 
 .submit-status[data-state='ok'] {
@@ -762,7 +761,8 @@ input[type='range'] {
 
 /* --- Petits écrans ---------------------------------------------------------------------------- */
 
-@media (max-width: 959px), (max-height: 599px) {
+@media (max-width: 959px),
+(max-height: 599px) {
     .ranking-scroll {
         max-height: calc(2rem + 10.5 * 2.25rem);
     }
