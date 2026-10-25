@@ -1,99 +1,281 @@
+/* Ladder Isolation. Deux couleurs, celles des pions : le rouge sert aussi d'action principale,
+   l'encre est le noir. Le plateau est le seul élément expressif ; les cases détruites sont percées. */
+
 :root {
-    --bg: #f6f7f9;
-    --panel: #ffffff;
-    --text: #1d2330;
-    --muted: #6b7280;
-    --border: #dfe3ea;
-    --accent: #2563eb;
-    --red: #d63b3b;
-    --black: #1f2937;
-    --cell: #e9edf3;
-    --hole: #9aa3b2;
-    --from: #fde68a;
-    --to: #bbf7d0;
-    --destroyed: #fca5a5;
+    --paper: #eceff3;
+    --surface: #f9fafb;
+    --ink: #12161d;
+    --muted: #5b6470;
+    --line: #d3d9e0;
+    --red: #c32f3c;
+    --red-ink: #ffffff;
+    --pawn-black: #1b1f27;
+    --pawn-rim: #1b1f27;
+    --black-mark: #7b8594;
+    --tile: #dce2e9;
+    --hole: #171b22;
+    --hover: #e3e8ee;
+    --ok: #1f7a4d;
+
+    --radius: 10px;
+    --gap: clamp(10px, 1.2vw, 16px);
+    --font: 'Archivo', system-ui, sans-serif;
+
     color-scheme: light dark;
 }
 
 @media (prefers-color-scheme: dark) {
     :root {
-        --bg: #11151c;
-        --panel: #1a2029;
-        --text: #e6e9ef;
-        --muted: #9aa3b2;
-        --border: #2c3442;
-        --accent: #60a5fa;
-        --black: #0b0e13;
-        --cell: #2a3240;
-        --hole: #10141a;
-        --from: #6b5a1e;
-        --to: #1f5c3a;
-        --destroyed: #7a2e2e;
+        --paper: #121419;
+        --surface: #1a1e25;
+        --ink: #e7eaee;
+        --muted: #959da9;
+        --line: #2a303a;
+        --red: #e5484d;
+        --pawn-black: #0d0f13;
+        --pawn-rim: #aab2bd;
+        --black-mark: #aab2bd;
+        --tile: #313843;
+        --hole: #07080a;
+        --hover: #222730;
+        --ok: #4cc38a;
     }
 }
 
-* {
+*,
+*::before,
+*::after {
     box-sizing: border-box;
+}
+
+html {
+    -webkit-text-size-adjust: 100%;
 }
 
 body {
     margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font: 15px/1.45 system-ui, sans-serif;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    background: var(--paper);
+    color: var(--ink);
+    font: 400 15px/1.45 var(--font);
+    font-variant-numeric: tabular-nums;
 }
 
-header {
+h1,
+h2,
+p {
+    margin: 0;
+}
+
+h2 {
+    font-size: 1rem;
+    font-weight: 700;
+    font-stretch: 112%;
+    letter-spacing: -0.01em;
+}
+
+button,
+input,
+select {
+    font: inherit;
+    color: inherit;
+}
+
+:focus-visible {
+    outline: 2px solid var(--red);
+    outline-offset: 2px;
+}
+
+abbr[title] {
+    text-decoration: none;
+}
+
+/* --- En-tête ------------------------------------------------------------------------------ */
+
+.masthead {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    padding: 16px;
-    border-bottom: 1px solid var(--border);
+    gap: 8px 24px;
+    padding: 12px max(var(--gap), env(safe-area-inset-right)) 12px max(var(--gap), env(safe-area-inset-left));
+    border-bottom: 1px solid var(--line);
 }
 
-h1 {
-    margin: 0;
-    font-size: 1.4rem;
+.title {
+    font-size: clamp(1.25rem, 1rem + 1vw, 1.6rem);
+    font-weight: 850;
+    font-stretch: 118%;
+    letter-spacing: -0.03em;
+    line-height: 1.1;
 }
 
-h2 {
-    margin: 0 0 12px;
-    font-size: 1.1rem;
-}
-
-.muted {
+.title-course {
+    font-weight: 500;
+    font-stretch: 100%;
+    letter-spacing: 0;
     color: var(--muted);
-    font-weight: normal;
 }
 
 .controls {
     display: flex;
-    gap: 16px;
+    flex-wrap: wrap;
     align-items: center;
+    gap: 8px 20px;
 }
 
-main {
+.session {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+}
+
+select {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 4px 8px;
+    cursor: pointer;
+}
+
+.status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 0.875rem;
+}
+
+.live {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex: none;
+}
+
+.live.on {
+    background: var(--ok);
+}
+
+.live.error {
+    background: var(--red);
+}
+
+/* Le seul mouvement non sollicité : de nouvelles parties viennent d'arriver. */
+.live.pulse {
+    animation: pulse 1.2s ease-out;
+}
+
+@keyframes pulse {
+    from {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 70%, transparent);
+    }
+    to {
+        box-shadow: 0 0 0 10px transparent;
+    }
+}
+
+/* --- Gabarit ------------------------------------------------------------------------------- */
+
+.layout {
+    flex: 1;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 16px;
-    padding: 16px;
-    max-width: 1300px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--gap);
+    width: 100%;
+    max-width: 1680px;
     margin: 0 auto;
+    padding: var(--gap) max(var(--gap), env(safe-area-inset-right)) max(var(--gap), env(safe-area-inset-bottom))
+        max(var(--gap), env(safe-area-inset-left));
 }
 
 .panel {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px;
     min-width: 0;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 14px 16px;
 }
 
-.panel:first-child {
-    grid-column: 1 / -1;
+.panel > h2 {
+    margin-bottom: 10px;
 }
+
+.scroll {
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+}
+
+/* Une ligne coupée par le bas se lit comme « il y en a d'autres ». */
+.scroll.more {
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5rem), transparent);
+}
+
+/* Tout l'essentiel sur un écran : seuls le classement au-delà du 10e et les parties défilent. */
+@media (min-width: 960px) and (min-height: 600px) {
+    body {
+        height: 100dvh;
+        overflow: hidden;
+    }
+
+    .layout {
+        min-height: 0;
+        grid-template-columns: minmax(380px, 5fr) minmax(0, 7fr);
+        grid-template-rows: auto auto minmax(9.5rem, 1fr);
+        grid-template-areas:
+            'ranking submit'
+            'ranking replay'
+            'games replay';
+    }
+
+    .ranking {
+        grid-area: ranking;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+
+    .submit {
+        grid-area: submit;
+    }
+
+    .replay {
+        grid-area: replay;
+        min-height: 0;
+    }
+
+    .games {
+        grid-area: games;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+
+    .games-list {
+        flex: 1;
+        min-height: 0;
+    }
+
+    /* Dix lignes et l'amorce de la onzième ; sur un écran trop bas, ce qui reste après les
+       parties récentes. */
+    .ranking-scroll {
+        max-height: min(calc(2rem + 10.5 * 2.25rem), calc(100dvh - 20rem));
+    }
+}
+
+@media (min-width: 1400px) and (min-height: 600px) {
+    .layout {
+        grid-template-columns: minmax(440px, 4fr) minmax(0, 7fr);
+    }
+}
+
+/* --- Classement ----------------------------------------------------------------------------- */
 
 table {
     width: 100%;
@@ -102,116 +284,259 @@ table {
 
 th,
 td {
-    padding: 6px 8px;
-    border-bottom: 1px solid var(--border);
+    padding: 0 8px;
+    height: 2.25rem;
     text-align: left;
     white-space: nowrap;
+    border-bottom: 1px solid var(--line);
 }
 
 th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    height: 2rem;
+    background: var(--surface);
     color: var(--muted);
+    font-size: 0.8125rem;
     font-weight: 600;
-    font-size: 0.85rem;
+}
+
+tbody tr:last-child td {
+    border-bottom: 0;
 }
 
 .num {
     text-align: right;
-    font-variant-numeric: tabular-nums;
 }
 
-#ranking {
-    display: block;
-    overflow-x: auto;
+.rank {
+    width: 2.5em;
+    color: var(--muted);
+}
+
+.team {
+    font-weight: 600;
+    width: 100%;
+    max-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.elo {
+    font-size: 1.25rem;
+    font-weight: 800;
+    font-stretch: 75%;
+    letter-spacing: 0.01em;
+}
+
+tbody tr:first-child .rank,
+tbody tr:first-child .elo {
+    color: var(--red);
+}
+
+.record,
+.last-col,
+.pct {
+    color: var(--muted);
 }
 
 .badge {
     display: inline-block;
-    padding: 0 6px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    border: 1px solid var(--border);
-    color: var(--muted);
     margin-left: 6px;
+    padding: 0 6px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1.5;
+    color: var(--muted);
+    vertical-align: 1px;
 }
 
 .badge.anchor {
-    border-color: var(--accent);
-    color: var(--accent);
+    border-color: var(--ink);
+    color: var(--ink);
 }
 
-.note {
+.empty {
+    padding: 16px 8px;
     color: var(--muted);
-    font-size: 0.85rem;
-    margin: 12px 0 0;
+    max-width: 60ch;
 }
 
-#games {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    max-height: 560px;
-    overflow-y: auto;
+.how {
+    margin-top: 10px;
+    font-size: 0.8125rem;
+    color: var(--muted);
 }
 
-#games li {
+.how summary {
+    cursor: pointer;
+    width: fit-content;
+}
+
+.how p {
+    margin-top: 6px;
+    max-width: 70ch;
+}
+
+/* --- Soumission ------------------------------------------------------------------------------ */
+
+.submit-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    gap: 10px;
+    align-items: end;
+}
+
+.field {
     display: flex;
-    flex-wrap: wrap;
-    gap: 4px 8px;
-    align-items: baseline;
-    padding: 6px 8px;
-    border-bottom: 1px solid var(--border);
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    font-size: 0.8125rem;
+    color: var(--muted);
+}
+
+.field input[type='password'],
+.file-button,
+.primary {
+    height: 2.5rem;
+    border-radius: 8px;
+    font-size: 0.9375rem;
+}
+
+.field input[type='password'] {
+    width: 100%;
+    padding: 0 12px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    color: var(--ink);
+}
+
+/* Le vrai champ reste dans le DOM (clavier, lecteurs d'écran) mais invisible. */
+.file {
+    position: relative;
+}
+
+.file input {
+    position: absolute;
+    inset: auto 0 0;
+    height: 2.5rem;
+    opacity: 0;
     cursor: pointer;
 }
 
-#games li:hover,
-#games li.selected {
-    background: var(--cell);
+.file-button {
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    border: 1px dashed var(--muted);
+    color: var(--ink);
+    pointer-events: none;
 }
 
-#games li > span {
+.file-button span {
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-#games .winner {
+.file input:focus-visible + .file-button {
+    outline: 2px solid var(--red);
+    outline-offset: 2px;
+}
+
+.file input:hover + .file-button {
+    border-color: var(--ink);
+}
+
+.primary {
+    padding: 0 18px;
+    border: 0;
+    background: var(--red);
+    color: var(--red-ink);
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.primary:hover {
+    background: color-mix(in srgb, var(--red) 88%, var(--ink));
+}
+
+.primary:disabled {
+    cursor: progress;
+    opacity: 0.6;
+}
+
+.submit-status {
+    margin-top: 10px;
+    font-size: 0.8125rem;
+    color: var(--muted);
+    max-width: 75ch;
+}
+
+.submit-status[data-state='ok'] {
+    color: var(--ok);
+    font-weight: 600;
+}
+
+.submit-status[data-state='error'] {
+    color: var(--red);
+    font-weight: 600;
+}
+
+.submit-status[data-state='pending'] {
+    color: var(--ink);
+}
+
+/* --- Replay ---------------------------------------------------------------------------------- */
+
+.replay {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+}
+
+.replay-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+}
+
+.replay-info {
+    color: var(--muted);
+    min-width: 0;
+}
+
+.replay-info strong {
+    color: var(--ink);
     font-weight: 700;
 }
 
-#games .side-red::before,
-#games .side-black::before {
-    content: '';
-    display: inline-block;
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    margin-right: 4px;
-}
-
-#games .side-red::before {
-    background: var(--red);
-}
-
-#games .side-black::before {
-    background: var(--black);
-    border: 1px solid var(--muted);
-}
-
-#games time,
-#games .meta {
-    color: var(--muted);
-    font-size: 0.85rem;
-}
-
-#games .meta {
-    margin-left: auto;
+.board-wrap {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    place-items: center;
 }
 
 .board {
+    --mover: var(--red);
     display: grid;
-    grid-template-columns: 1.4em repeat(12, 1fr);
-    gap: 2px;
-    width: min(100%, 480px);
-    margin: 0 auto;
-    font-size: 0.75rem;
+    grid-template-columns: 1.5em repeat(12, minmax(0, 1fr));
+    grid-template-rows: repeat(12, minmax(0, 1fr)) 1.5em;
+    gap: clamp(2px, 0.35vmin, 4px);
+    width: min(100%, 560px);
+    aspect-ratio: 1;
+    font-size: clamp(0.625rem, 0.5rem + 0.4vw, 0.8125rem);
+}
+
+.board[data-mover='black'] {
+    --mover: var(--black-mark);
 }
 
 .board .label {
@@ -221,99 +546,284 @@ th {
     color: var(--muted);
 }
 
-.board .cell {
-    aspect-ratio: 1;
-    background: var(--cell);
+.cell {
+    position: relative;
+    display: grid;
+    place-items: center;
+    background: var(--tile);
     border-radius: 3px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
 }
 
-.board .cell.hole {
+/* Une case détruite est un trou dans le plateau, plus profond que le fond de la page. */
+.cell.hole {
     background: var(--hole);
+    box-shadow:
+        inset 0 3px 6px rgb(0 0 0 / 0.65),
+        inset 0 -1px 0 rgb(255 255 255 / 0.08);
 }
 
-.board .cell.from {
-    background: var(--from);
+.cell.from {
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--mover) 55%, transparent);
 }
 
-.board .cell.to {
-    background: var(--to);
+.cell.to {
+    box-shadow: inset 0 0 0 2px var(--mover);
 }
 
-.board .cell.destroyed-now {
-    background: var(--destroyed);
+.cell.destroyed-now {
+    box-shadow:
+        inset 0 0 0 2px var(--mover),
+        inset 0 3px 6px rgb(0 0 0 / 0.65);
 }
 
-.board .pawn {
-    width: 70%;
-    height: 70%;
+.pawn {
+    width: 72%;
+    aspect-ratio: 1;
     border-radius: 50%;
 }
 
-.board .pawn.red {
-    background: var(--red);
+.pawn.red {
+    background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--red) 70%, #fff), var(--red) 60%);
 }
 
-.board .pawn.black {
-    background: var(--black);
-    border: 2px solid var(--muted);
+.pawn.black {
+    background: radial-gradient(circle at 35% 30%, #3a4150, var(--pawn-black) 60%);
+    box-shadow: 0 0 0 2px var(--pawn-rim);
+}
+
+.replay-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 16px;
+}
+
+.move {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+}
+
+.move-count {
+    color: var(--muted);
+    font-size: 0.875rem;
+}
+
+.move-text {
+    font-size: 1.375rem;
+    font-weight: 800;
+    font-stretch: 75%;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+
+.move-text .destroyed {
+    color: var(--muted);
+    font-weight: 600;
 }
 
 .replay-controls {
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
     align-items: center;
-    justify-content: center;
-    margin-top: 12px;
+    gap: 6px;
+    flex: 1 1 320px;
+    max-width: 520px;
 }
 
-.replay-controls input[type='range'] {
-    flex: 1 1 160px;
-}
-
-button,
-select {
-    font: inherit;
-    color: inherit;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 4px 10px;
+.icon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
     cursor: pointer;
 }
 
-button:hover {
-    border-color: var(--accent);
+.icon:hover {
+    border-color: var(--ink);
 }
 
-.submit form {
+.icon svg {
+    width: 18px;
+    height: 18px;
+    fill: currentColor;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linejoin: round;
+}
+
+.icon.play {
+    background: var(--ink);
+    color: var(--paper);
+    border-color: var(--ink);
+}
+
+.icon.play .i-pause,
+.icon.play.playing .i-play {
+    display: none;
+}
+
+.icon.play.playing .i-pause {
+    display: block;
+}
+
+input[type='range'] {
+    flex: 1;
+    min-width: 80px;
+    accent-color: var(--red);
+    cursor: pointer;
+}
+
+/* --- Parties récentes ------------------------------------------------------------------------ */
+
+.games-list {
+    list-style: none;
+    margin: 0 -8px;
+    padding: 0;
+}
+
+.game {
+    display: grid;
+    grid-template-columns: 4.25em minmax(0, 1fr) minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 7px 8px;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    text-align: left;
+    cursor: pointer;
+}
+
+.game:hover {
+    background: var(--hover);
+}
+
+.game[aria-current='true'] {
+    background: var(--hover);
+    box-shadow: inset 3px 0 0 var(--red);
+}
+
+.game time,
+.game .meta {
+    color: var(--muted);
+    font-size: 0.8125rem;
+}
+
+.game .meta {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.side {
     display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    align-items: end;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
 }
 
-.submit label {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 0.9rem;
+.side span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-.submit input {
-    font: inherit;
-    color: inherit;
+.side::before {
+    content: '';
+    flex: none;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
 }
 
-@media (max-width: 860px) {
-    main {
+.side.red::before {
+    background: var(--red);
+}
+
+.side.black::before {
+    background: var(--pawn-black);
+    box-shadow: 0 0 0 1.5px var(--pawn-rim);
+}
+
+.side.winner {
+    font-weight: 700;
+}
+
+.side:not(.winner) {
+    color: var(--muted);
+}
+
+/* --- Petits écrans ---------------------------------------------------------------------------- */
+
+@media (max-width: 959px), (max-height: 599px) {
+    .ranking-scroll {
+        max-height: calc(2rem + 10.5 * 2.25rem);
+    }
+
+    .games-list {
+        max-height: 60vh;
+    }
+
+    .replay {
+        padding: 4px 0;
+    }
+}
+
+@media (max-width: 640px) {
+    .submit-form {
         grid-template-columns: minmax(0, 1fr);
     }
 
-    #games time {
-        flex-basis: 100%;
+    .last-col,
+    .pct {
+        display: none;
+    }
+
+    .game {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        row-gap: 2px;
+    }
+
+    .game time {
+        grid-column: 1;
+        grid-row: 2;
+    }
+
+    .game .meta {
+        grid-column: 2;
+        grid-row: 2;
+    }
+
+    .move-text {
+        font-size: 1.125rem;
+    }
+
+    .replay-controls {
+        max-width: none;
+    }
+}
+
+/* Plein écran : le plateau prend toute la place libre de sa colonne. En fin de fichier pour
+   l'emporter sur la taille par défaut de .board. */
+@media (min-width: 960px) and (min-height: 600px) {
+    .board-wrap {
+        container-type: size;
+    }
+
+    .board {
+        width: min(100cqw, 100cqh);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .live.pulse {
+        animation: none;
     }
 }

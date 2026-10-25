@@ -2,89 +2,130 @@
 <html lang="fr">
     <head>
         <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="color-scheme" content="light dark" />
         <title>Ladder Isolation</title>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            rel="stylesheet"
+            href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap"
+        />
         <link rel="stylesheet" href="style.css" />
         <script type="module" src="app.js"></script>
     </head>
     <body>
-        <header>
-            <h1>Ladder Isolation <span class="muted">LOG200</span></h1>
+        <header class="masthead">
+            <h1 class="title">Ladder Isolation <span class="title-course">LOG200</span></h1>
             <div class="controls">
-                <label>
-                    Session
+                <label class="session">
+                    <span>Session</span>
                     <select id="session"></select>
                 </label>
-                <span id="status" class="muted"></span>
+                <p class="status" role="status">
+                    <span id="live" class="live" aria-hidden="true"></span>
+                    <span id="status">Chargement des parties…</span>
+                </p>
             </div>
         </header>
 
-        <main>
-            <section class="panel" aria-labelledby="ranking-title">
+        <main class="layout">
+            <section class="panel ranking" aria-labelledby="ranking-title">
                 <h2 id="ranking-title">Classement</h2>
-                <table id="ranking">
-                    <thead>
-                        <tr>
-                            <th>#</th>
-                            <th>Équipe</th>
-                            <th class="num">Elo</th>
-                            <th class="num">Parties</th>
-                            <th class="num">V-D</th>
-                            <th class="num">% V</th>
-                            <th>Dernière partie</th>
-                        </tr>
-                    </thead>
-                    <tbody></tbody>
-                </table>
-                <p class="note">
-                    Elo relatif entre les équipes : 1500 au départ, K = 40 pendant les 20 premières
-                    parties de chaque soumission (marque <span class="badge prov">provisoire</span>),
-                    puis K = 20.
-                    <span id="anchor-note" hidden
-                        >Une <span class="badge anchor">ancre</span> garde un rating fixe de 1500.</span
-                    >
-                    Temps par coup du ladder : <span id="time-ms">?</span> ms (5000 ms au tournoi).
-                </p>
-            </section>
-
-            <section class="panel" aria-labelledby="games-title">
-                <h2 id="games-title">Parties récentes</h2>
-                <ul id="games"></ul>
-            </section>
-
-            <section class="panel replay" aria-labelledby="replay-title">
-                <h2 id="replay-title">Replay <span id="replay-info" class="muted"></span></h2>
-                <div id="board" class="board" aria-label="Plateau 12x12"></div>
-                <div class="replay-controls">
-                    <button id="first" title="Début">|&lt;</button>
-                    <button id="prev" title="Coup précédent">&lt;</button>
-                    <button id="play" title="Lecture">Lecture</button>
-                    <button id="next" title="Coup suivant">&gt;</button>
-                    <button id="last" title="Fin">&gt;|</button>
-                    <input id="step" type="range" min="0" max="0" value="0" aria-label="Coup" />
-                    <span id="step-label" class="muted"></span>
+                <div class="scroll ranking-scroll" tabindex="0" aria-labelledby="ranking-title">
+                    <table id="ranking">
+                        <thead>
+                            <tr>
+                                <th scope="col" class="num">#</th>
+                                <th scope="col">Équipe</th>
+                                <th scope="col" class="num">Elo</th>
+                                <th scope="col" class="num"><abbr title="Victoires et défaites">V–D</abbr></th>
+                                <th scope="col" class="num"><abbr title="Pourcentage de victoires">% V</abbr></th>
+                                <th scope="col" class="num last-col">Dernière</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                    <p id="ranking-empty" class="empty" hidden>
+                        Aucune partie pour l'instant : le classement se remplit dès que deux équipes ont un jar
+                        accepté.
+                    </p>
                 </div>
+                <details class="how">
+                    <summary>Comment l'Elo est calculé</summary>
+                    <p>
+                        Chaque équipe part à 1500. Un nouveau jar joue ses 20 premières parties à K = 40 (marque
+                        <span class="badge">provisoire</span>), puis à K = 20.
+                        <span id="anchor-note" hidden
+                            >Une <span class="badge anchor">ancre</span> garde un rating fixe de 1500.</span
+                        >
+                        Temps par coup du ladder : <span id="time-ms">?</span> ms, contre 5000 ms au tournoi.
+                    </p>
+                </details>
             </section>
 
             <section id="submit-panel" class="panel submit" aria-labelledby="submit-title" hidden>
                 <h2 id="submit-title">Soumettre un jar</h2>
-                <form id="submit-form">
-                    <label>
-                        Token de l'équipe
-                        <input id="submit-token" type="password" autocomplete="off" required />
+                <form id="submit-form" class="submit-form">
+                    <label class="field">
+                        <span>Token de l'équipe</span>
+                        <input id="submit-token" type="password" autocomplete="off" spellcheck="false" required />
                     </label>
-                    <label>
-                        Jar
+                    <label class="field file">
+                        <span>Jar</span>
                         <input id="submit-file" type="file" accept=".jar" required />
+                        <span class="file-button" aria-hidden="true">
+                            <span id="submit-file-name">Choisir le jar</span>
+                        </span>
                     </label>
-                    <button id="submit-button" type="submit">Envoyer</button>
+                    <button id="submit-button" class="primary" type="submit">Envoyer le jar</button>
                 </form>
-                <p id="submit-status" class="note" role="status"></p>
-                <p class="note">
-                    Le jar joue deux parties de test contre un bot aléatoire. S'il les termine sans
-                    dépasser le temps ni planter, il remplace le jar actif de l'équipe. Comptez jusqu'à
-                    deux minutes.
+                <p id="submit-status" class="submit-status" role="status" aria-live="polite">
+                    Deux parties de test contre un bot aléatoire, jusqu'à deux minutes. Si elles se terminent sans
+                    dépassement de temps ni plantage, ce jar remplace celui de l'équipe.
                 </p>
+            </section>
+
+            <section class="replay" aria-labelledby="replay-title">
+                <div class="replay-head">
+                    <h2 id="replay-title">Replay</h2>
+                    <p id="replay-info" class="replay-info">Choisissez une partie pour la rejouer.</p>
+                </div>
+                <div class="board-wrap">
+                    <div id="board" class="board" role="img" aria-label="Plateau 12 × 12"></div>
+                </div>
+                <div class="replay-bar">
+                    <p class="move" aria-live="polite">
+                        <span id="move-count" class="move-count"></span>
+                        <span id="move-text" class="move-text"></span>
+                    </p>
+                    <div class="replay-controls">
+                        <button id="first" class="icon" type="button" aria-label="Début de la partie">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14M19 5l-9 7 9 7z" /></svg>
+                        </button>
+                        <button id="prev" class="icon" type="button" aria-label="Coup précédent">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5l-9 7 9 7z" /></svg>
+                        </button>
+                        <button id="play" class="icon play" type="button" aria-label="Lecture">
+                            <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l11 7-11 7z" /></svg>
+                            <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M8 5v14M16 5v14" />
+                            </svg>
+                        </button>
+                        <button id="next" class="icon" type="button" aria-label="Coup suivant">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l9 7-9 7z" /></svg>
+                        </button>
+                        <button id="last" class="icon" type="button" aria-label="Fin de la partie">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5v14M5 5l9 7-9 7z" /></svg>
+                        </button>
+                        <input id="step" type="range" min="0" max="0" value="0" aria-label="Coup affiché" />
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel games" aria-labelledby="games-title">
+                <h2 id="games-title">Parties récentes</h2>
+                <ol id="games" class="scroll games-list" tabindex="-1"></ol>
             </section>
         </main>
     </body>

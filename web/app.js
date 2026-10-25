@@ -1,16 +1,18 @@
 // Page du ladder : lit le JSONL, calcule le classement, affiche les parties et le replay.
-// Source des donnees : ?data=URL, sinon ../data/games.jsonl (serveur statique lance a la racine).
+// Source des données : ?data=URL, sinon ../data/games.jsonl (serveur statique lancé à la racine).
 
 import { computeRatings, parseJsonl, sessions } from './elo.js'
-import { BLACK, DESTROYED, positions, RED, SIZE } from './replay.js'
+import { BLACK, DESTROYED, positions, RED, SIZE, squareName } from './replay.js'
 
 const DATA_URL = new URLSearchParams(location.search).get('data') ?? '../data/games.jsonl'
 const REFRESH_MS = 15000
 const RECENT_GAMES = 50
+const PLAY_MS = 500
 const GLOBAL = ''
 
 const $ = (id) => document.getElementById(id)
 
+// Raison de la fin, du point de vue du perdant : liste compacte, puis phrase du replay.
 const REASONS = {
     no_moves: 'bloqué',
     timeout: 'temps',
@@ -18,10 +20,18 @@ const REASONS = {
     protocol: 'coups invalides',
     no_show: 'absent',
 }
+const ENDINGS = {
+    no_moves: (loser) => `${loser} n'a plus de coup`,
+    timeout: (loser) => `${loser} a dépassé son temps`,
+    disconnect: (loser) => `${loser} s'est déconnecté`,
+    protocol: (loser) => `${loser} a joué trop de coups invalides`,
+    no_show: (loser) => `${loser} ne s'est pas connecté`,
+}
 
 let lastText = null
 let games = []
-let replay = { game: null, steps: [], index: 0, timer: null }
+// `pinned` : la personne a choisi une partie ; sinon le replay suit la dernière jouée.
+let replay = { game: null, steps: [], index: 0, timer: null, pinned: false }
 
 function el(tag, attrs = {}, ...children) {
     const node = document.createElement(tag)
@@ -33,9 +43,25 @@ function el(tag, attrs = {}, ...children) {
     return node
 }
 
-function formatTime(ts) {
+const timeFormat = new Intl.DateTimeFormat('fr-CA', { timeStyle: 'short' })
+const dayFormat = new Intl.DateTimeFormat('fr-CA', { day: 'numeric', month: 'short' })
+const fullFormat = new Intl.DateTimeFormat('fr-CA', { dateStyle: 'long', timeStyle: 'short' })
+
+function sameDay(a, b) {
+    return a.toDateString() === b.toDateString()
+}
+
+function shortWhen(ts) {
     const d = new Date(ts)
-    return d.toLocaleString('fr-CA', { dateStyle: 'short', timeStyle: 'short' })
+    return sameDay(d, new Date()) ? timeFormat.format(d) : dayFormat.format(d)
+}
+
+function ago(ts) {
+    const minutes = Math.floor((Date.now() - new Date(ts)) / 60000)
+    if (minutes < 1) return "à l'instant"
+    if (minutes < 60) return `il y a ${minutes} min`
+    if (minutes < 24 * 60) return `il y a ${Math.floor(minutes / 60)} h`
+    return dayFormat.format(new Date(ts))
 }
 
 async function refresh() {
@@ -44,24 +70,43 @@ async function refresh() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const text = await res.text()
         if (text !== lastText) {
+            const first = lastText === null
             lastText = text
-            const parsed = parseJsonl(text)
-            games = parsed.games
+            games = parseJsonl(text).games
             renderSessions()
             render()
-            if (!replay.game && games.length) showGame(games[games.length - 1])
+            if (!first) pulse()
+        } else {
+            render()
         }
-        $('status').textContent = `${games.length} parties, mise à jour ${new Date().toLocaleTimeString('fr-CA')}`
+        $('live').className = 'live on'
     } catch (e) {
-        $('status').textContent = `Données indisponibles (${DATA_URL}) : ${e.message}`
+        $('live').className = 'live error'
+        $('status').textContent = `Données indisponibles : ${e.message}`
     }
+}
+
+// Fondu en bas d'une zone tant qu'il reste du contenu à faire défiler.
+function markOverflow(node) {
+    node.classList.toggle('more', node.scrollTop + node.clientHeight < node.scrollHeight - 2)
+}
+
+const scrollAreas = [document.querySelector('.ranking-scroll'), $('games')]
+for (const node of scrollAreas) node.addEventListener('scroll', () => markOverflow(node), { passive: true })
+addEventListener('resize', () => scrollAreas.forEach(markOverflow))
+
+function pulse() {
+    const live = $('live')
+    live.classList.remove('pulse')
+    void live.offsetWidth
+    live.classList.add('pulse')
 }
 
 function renderSessions() {
     const select = $('session')
     const current = select.value
     select.replaceChildren(
-        el('option', { value: GLOBAL }, 'Toutes (global)'),
+        el('option', { value: GLOBAL }, 'Toutes'),
         ...sessions(games).map((s) => el('option', { value: s }, s))
     )
     select.value = [...select.options].some((o) => o.value === current) ? current : GLOBAL
@@ -74,70 +119,100 @@ function selectedGames() {
 
 function render() {
     const session = $('session').value || null
-    const ratings = computeRatings(games, session)
+    const list = selectedGames()
+    renderRanking(computeRatings(games, session))
+    renderGames(list)
+
+    const times = [...new Set(list.map((g) => g.time_ms))]
+    $('time-ms').textContent = times.join(', ') || '?'
+    const pace = times.length === 1 ? `, ${times[0]} ms par coup` : ''
+    $('status').textContent = `${list.length} parties${pace}, à jour à ${timeFormat.format(new Date())}`
+
+    scrollAreas.forEach(markOverflow)
+
+    const latest = list.at(-1)
+    if (latest && !replay.pinned && replay.game?.id !== latest.id) showGame(latest)
+}
+
+function renderRanking(ratings) {
+    $('ranking-empty').hidden = ratings.length > 0
+    $('anchor-note').hidden = !ratings.some((r) => r.anchor)
     $('ranking')
         .querySelector('tbody')
         .replaceChildren(
             ...ratings.map((r, i) => {
-                const team = el('td', {}, r.team)
+                const team = el('td', { class: 'team', title: r.team }, r.team)
                 if (r.anchor) team.append(el('span', { class: 'badge anchor' }, 'ancre'))
-                if (r.provisional) team.append(el('span', { class: 'badge prov' }, 'provisoire'))
+                if (r.provisional) team.append(el('span', { class: 'badge' }, 'provisoire'))
                 return el(
                     'tr',
                     {},
-                    el('td', { class: 'num' }, String(i + 1)),
+                    el('td', { class: 'num rank' }, String(i + 1)),
                     team,
-                    el('td', { class: 'num' }, String(Math.round(r.rating))),
-                    el('td', { class: 'num' }, String(r.games)),
-                    el('td', { class: 'num' }, `${r.wins}-${r.losses}`),
-                    el('td', { class: 'num' }, `${Math.round((100 * r.wins) / r.games)}`),
-                    el('td', {}, r.last ? formatTime(r.last) : '')
+                    el('td', { class: 'num elo' }, String(Math.round(r.rating))),
+                    el('td', { class: 'num record' }, `${r.wins}–${r.losses}`),
+                    el('td', { class: 'num pct' }, `${Math.round((100 * r.wins) / r.games)} %`),
+                    el(
+                        'td',
+                        { class: 'num last-col', title: r.last ? fullFormat.format(new Date(r.last)) : '' },
+                        r.last ? ago(r.last) : ''
+                    )
                 )
             })
         )
+}
 
-    $('anchor-note').hidden = !ratings.some((r) => r.anchor)
-
-    const list = selectedGames()
-    const times = new Set(list.map((g) => g.time_ms))
-    $('time-ms').textContent = [...times].join(', ') || '?'
-
-    $('games').replaceChildren(
-        ...list
-            .slice(-RECENT_GAMES)
-            .reverse()
-            .map((g) => {
-                const side = (color) =>
-                    el(
-                        'span',
-                        { class: `side-${color}${g.winner === color ? ' winner' : ''}` },
-                        g[color].team
-                    )
-                const li = el(
-                    'li',
-                    { 'data-id': g.id, title: g.id },
-                    el('time', { datetime: g.ts }, formatTime(g.ts)),
-                    side('red'),
-                    'contre',
-                    side('black'),
-                    el('span', { class: 'meta' }, `${REASONS[g.reason] ?? g.reason}, ${g.moves.length} coups`)
+function renderGames(list) {
+    const items = list
+        .slice(-RECENT_GAMES)
+        .reverse()
+        .map((g) => {
+            const side = (color) =>
+                el(
+                    'span',
+                    { class: `side ${color}${g.winner === color ? ' winner' : ''}` },
+                    el('span', {}, g[color].team)
                 )
-                if (replay.game?.id === g.id) li.classList.add('selected')
-                li.addEventListener('click', () => showGame(g))
-                return li
-            })
+            const button = el(
+                'button',
+                {
+                    type: 'button',
+                    class: 'game',
+                    'data-id': g.id,
+                    'aria-label': `${g.red.team} (rouge) contre ${g.black.team} (noir), ${g[g.winner].team} gagne`,
+                },
+                el('time', { datetime: g.ts, title: fullFormat.format(new Date(g.ts)) }, shortWhen(g.ts)),
+                side('red'),
+                side('black'),
+                el('span', { class: 'meta' }, `${REASONS[g.reason] ?? g.reason}, ${g.moves.length} coups`)
+            )
+            if (replay.game?.id === g.id) button.setAttribute('aria-current', 'true')
+            button.addEventListener('click', () => showGame(g, true))
+            return el('li', {}, button)
+        })
+    $('games').replaceChildren(
+        ...(items.length ? items : [el('li', { class: 'empty' }, 'Les parties jouées apparaîtront ici.')])
     )
 }
 
-function showGame(g) {
+function showGame(g, pinned = replay.pinned) {
     stopPlayback()
-    replay = { game: g, steps: positions(g), index: 0, timer: null }
-    replay.index = replay.steps.length - 1
-    $('step').max = String(replay.steps.length - 1)
-    $('replay-info').textContent = `${g.red.team} (rouge) contre ${g.black.team} (noir), gagnant : ${
-        g[g.winner].team
-    } (${REASONS[g.reason] ?? g.reason})`
-    for (const li of $('games').children) li.classList.toggle('selected', li.dataset.id === g.id)
+    const steps = positions(g)
+    replay = { game: g, steps, index: steps.length - 1, timer: null, pinned }
+    $('step').max = String(steps.length - 1)
+
+    const loser = g.winner === 'red' ? 'black' : 'red'
+    const ending = ENDINGS[g.reason]?.(g[loser].team) ?? g.reason
+    $('replay-info').replaceChildren(
+        el('strong', {}, g.red.team),
+        ' (rouge) contre ',
+        el('strong', {}, g.black.team),
+        ` (noir) : ${g[g.winner].team} gagne, ${ending}.`
+    )
+    for (const button of $('games').querySelectorAll('.game')) {
+        if (button.dataset.id === g.id) button.setAttribute('aria-current', 'true')
+        else button.removeAttribute('aria-current')
+    }
     drawStep()
 }
 
@@ -166,9 +241,27 @@ function drawStep() {
     nodes.push(el('div'))
     for (let x = 0; x < SIZE; x++) nodes.push(el('div', { class: 'label' }, String.fromCharCode(65 + x)))
     board.replaceChildren(...nodes)
+
+    // Les rouges jouent les coups impairs : 1, 3, 5...
+    board.dataset.mover = index % 2 === 1 ? 'red' : 'black'
+    const total = steps.length - 1
     $('step').value = String(index)
-    const label = step.text ? `${index}/${steps.length - 1} : ${step.text}${step.opening ? ' (ouverture)' : ''}` : `0/${steps.length - 1}`
-    $('step-label').textContent = label
+    if (step.move) {
+        const { from, to, destroyed } = step.move
+        $('move-count').textContent = `Coup ${index} sur ${total}${step.opening ? ', ouverture' : ''}`
+        $('move-text').replaceChildren(
+            `${squareName(from)} → ${squareName(to)} `,
+            el('span', { class: 'destroyed' }, `détruit ${squareName(destroyed)}`)
+        )
+        board.setAttribute(
+            'aria-label',
+            `Coup ${index} sur ${total} : ${squareName(from)} vers ${squareName(to)}, ${squareName(destroyed)} détruite`
+        )
+    } else {
+        $('move-count').textContent = `Position initiale, ${total} coups`
+        $('move-text').replaceChildren()
+        board.setAttribute('aria-label', 'Plateau 12 × 12, position initiale')
+    }
 }
 
 function goTo(i) {
@@ -180,33 +273,46 @@ function goTo(i) {
 function stopPlayback() {
     clearInterval(replay.timer)
     replay.timer = null
-    $('play').textContent = 'Lecture'
+    $('play').classList.remove('playing')
+    $('play').setAttribute('aria-label', 'Lecture')
 }
 
 function togglePlayback() {
+    if (!replay.game) return
     if (replay.timer) return stopPlayback()
+    replay.pinned = true
     if (replay.index === replay.steps.length - 1) goTo(0)
-    $('play').textContent = 'Pause'
+    $('play').classList.add('playing')
+    $('play').setAttribute('aria-label', 'Pause')
     replay.timer = setInterval(() => {
         if (replay.index >= replay.steps.length - 1) return stopPlayback()
         goTo(replay.index + 1)
-    }, 500)
+    }, PLAY_MS)
 }
 
-$('session').addEventListener('change', render)
-$('first').addEventListener('click', () => goTo(0))
-$('prev').addEventListener('click', () => goTo(replay.index - 1))
-$('next').addEventListener('click', () => goTo(replay.index + 1))
-$('last').addEventListener('click', () => goTo(replay.steps.length - 1))
+// Parcourir une partie la fige : le replay ne saute plus vers la dernière jouée.
+function browse(i) {
+    replay.pinned = true
+    goTo(i)
+}
+
+$('session').addEventListener('change', () => {
+    replay.pinned = false
+    render()
+})
+$('first').addEventListener('click', () => browse(0))
+$('prev').addEventListener('click', () => browse(replay.index - 1))
+$('next').addEventListener('click', () => browse(replay.index + 1))
+$('last').addEventListener('click', () => browse(replay.steps.length - 1))
 $('play').addEventListener('click', togglePlayback)
-$('step').addEventListener('input', (e) => goTo(+e.target.value))
+$('step').addEventListener('input', (e) => browse(+e.target.value))
 document.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'SELECT') return
-    if (e.key === 'ArrowLeft') goTo(replay.index - 1)
-    if (e.key === 'ArrowRight') goTo(replay.index + 1)
+    if (e.target.closest('input, select, textarea, [contenteditable]')) return
+    if (e.key === 'ArrowLeft') browse(replay.index - 1)
+    if (e.key === 'ArrowRight') browse(replay.index + 1)
 })
 
-// Le formulaire n'apparait que si le service de soumission repond (absent en hebergement statique).
+// Le formulaire n'apparaît que si le service de soumission répond (absent en hébergement statique).
 const API = '../api'
 
 async function setupSubmit() {
@@ -217,20 +323,27 @@ async function setupSubmit() {
         return
     }
     $('submit-panel').hidden = false
+    const status = $('submit-status')
+    $('submit-file').addEventListener('change', (e) => {
+        $('submit-file-name').textContent = e.target.files[0]?.name ?? 'Choisir le jar'
+    })
     $('submit-form').addEventListener('submit', async (e) => {
         e.preventDefault()
         const file = $('submit-file').files[0]
         $('submit-button').disabled = true
-        $('submit-status').textContent = 'Parties de test en cours…'
+        status.dataset.state = 'pending'
+        status.textContent = 'Parties de test en cours, jusqu’à deux minutes…'
         try {
             const res = await fetch(`${API}/submit`, {
                 method: 'PUT',
                 headers: { Authorization: `Bearer ${$('submit-token').value.trim()}` },
                 body: file,
             })
-            $('submit-status').textContent = (await res.text()).trim()
+            status.dataset.state = res.ok ? 'ok' : 'error'
+            status.textContent = (await res.text()).trim()
         } catch (err) {
-            $('submit-status').textContent = `Envoi impossible : ${err.message}`
+            status.dataset.state = 'error'
+            status.textContent = `Envoi impossible : ${err.message}. Vérifiez la connexion, puis réessayez.`
         } finally {
             $('submit-button').disabled = false
         }
