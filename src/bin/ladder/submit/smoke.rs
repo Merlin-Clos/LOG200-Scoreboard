@@ -91,6 +91,7 @@ mod tests {
             reason,
             invalid: InvalidCounts::default(),
             duration_ms: 0,
+            move_ms: vec![],
         }
     }
 

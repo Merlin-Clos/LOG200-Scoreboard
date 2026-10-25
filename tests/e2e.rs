@@ -47,6 +47,7 @@ fn bots_play_a_full_valid_game() {
     assert!(result.validate().is_ok());
     assert!(result.opening.is_empty());
     assert!(!result.moves.is_empty());
+    assert_eq!(result.move_ms.len(), result.moves.len());
 }
 
 #[test]

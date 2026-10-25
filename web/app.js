@@ -3,7 +3,7 @@
 // sert la page. Données : ?data=URL, sinon <serveur>/data/games.jsonl.
 // ?session=, ?team= et ?game= suivent les choix de la page : l'adresse se partage telle quelle.
 
-import { computeRatings, parseJsonl, sessions, START } from './elo.js'
+import { computeRatings, moveTimes, parseJsonl, percentile, sessions, START, versions } from './elo.js'
 import { BLACK, DESTROYED, positions, RED, SIZE, squareName } from './replay.js'
 
 const params = new URLSearchParams(location.search)
@@ -12,6 +12,8 @@ const DATA_URL = params.get('data') ?? `${SERVER}/data/games.jsonl`
 const REFRESH_MS = 15000
 const RECENT_GAMES = 50
 const PLAY_MS = 500
+// p99 au-delà de cette part du temps par coup : l'équipe frôle le timeout.
+const PACE_WARN = 0.8
 const GLOBAL = ''
 const SESSION = params.get('session') ?? GLOBAL
 const TEAM = params.get('team') ?? GLOBAL
@@ -37,6 +39,8 @@ const ENDINGS = {
 
 let lastText = null
 let games = []
+// Équipe vers ses builds dans l'ordre, toutes sessions : sert à afficher vN.
+let builds = new Map()
 // Courbe de l'équipe recherchée : points[0] est le départ à START, puis une entrée d'historique par partie.
 let chart = { team: null, points: [], min: 0, max: 0, index: 0 }
 // `pinned` : la personne a choisi une partie ; sinon le replay suit la dernière jouée.
@@ -82,6 +86,7 @@ async function refresh() {
             const first = lastText === null
             lastText = text
             games = parseJsonl(text).games
+            builds = versions(games)
             renderSessions(first)
             const linked = first && games.find((g) => g.id === GAME)
             if (linked) showGame(linked, true)
@@ -145,7 +150,7 @@ function render() {
     const session = $('session').value || null
     const list = selectedGames()
     const ratings = computeRatings(games, session)
-    renderRanking(ratings)
+    renderRanking(ratings, paces(ratings, session))
     renderChart(ratings)
     renderGames(list, new Map(ratings.flatMap((r) => r.history.map((h) => [`${h.id}|${r.team}`, h]))))
 
@@ -160,7 +165,42 @@ function render() {
     if (latest && !replay.pinned && replay.game?.id !== latest.id) showGame(latest)
 }
 
-function renderRanking(ratings) {
+// « v3 » pour le build de `player`, vide sans build.
+function version(player) {
+    const n = player.build ? (builds.get(player.team)?.indexOf(player.build) ?? -1) + 1 : 0
+    return n ? `v${n}` : ''
+}
+
+// Temps par coup de chaque équipe avec son build du classement : coups triés et plus petit temps alloué.
+function paces(ratings, session) {
+    const current = new Map(ratings.map((r) => [r.team, r.build]))
+    const out = new Map()
+    for (const g of games) {
+        if (session !== null && g.session !== session) continue
+        for (const color of ['red', 'black']) {
+            const p = g[color]
+            if ((p.build ?? null) !== current.get(p.team)) continue
+            const ms = moveTimes(g, color)
+            if (!ms.length) continue
+            const pace = out.get(p.team) ?? { ms: [], limit: Infinity }
+            pace.ms.push(...ms)
+            pace.limit = Math.min(pace.limit, g.time_ms)
+            out.set(p.team, pace)
+        }
+    }
+    for (const pace of out.values()) pace.ms.sort((a, b) => a - b)
+    return out
+}
+
+function paceCell(pace) {
+    if (!pace) return el('td', { class: 'num pace' })
+    const [p50, p95, p99] = [0.5, 0.95, 0.99].map((p) => percentile(pace.ms, p))
+    const title = `Médiane ${p50} ms, p99 ${p99} ms, max ${pace.ms.at(-1)} ms, ${pace.ms.length} coups`
+    const warn = p99 >= PACE_WARN * pace.limit ? ' warn' : ''
+    return el('td', { class: `num pace${warn}`, title }, `${p95} ms`)
+}
+
+function renderRanking(ratings, pace) {
     $('ranking-empty').hidden = ratings.length > 0
     $('anchor-note').hidden = !ratings.some((r) => r.anchor)
     $('ranking')
@@ -168,6 +208,8 @@ function renderRanking(ratings) {
         .replaceChildren(
             ...ratings.map((r, i) => {
                 const team = el('td', { class: 'team', title: r.team }, r.team)
+                const v = version(r)
+                if (v) team.append(el('span', { class: 'badge', title: `Build ${r.build}` }, v))
                 if (r.anchor) team.append(el('span', { class: 'badge anchor' }, 'ancre'))
                 if (r.provisional) team.append(el('span', { class: 'badge' }, 'provisoire'))
                 return el(
@@ -178,6 +220,7 @@ function renderRanking(ratings) {
                     el('td', { class: 'num elo' }, String(Math.round(r.rating))),
                     el('td', { class: 'num record' }, `${r.wins}–${r.losses}`),
                     el('td', { class: 'num pct' }, `${Math.round((100 * r.wins) / r.games)} %`),
+                    paceCell(pace.get(r.team)),
                     el(
                         'td',
                         { class: 'num last-col', title: r.last ? fullFormat.format(new Date(r.last)) : '' },
@@ -293,7 +336,11 @@ function renderGames(list, deltas) {
                 el('time', { datetime: g.ts, title: fullFormat.format(new Date(g.ts)) }, shortWhen(g.ts)),
                 side('red'),
                 side('black'),
-                el('span', { class: 'meta' }, `${REASONS[g.reason] ?? g.reason}, ${g.moves.length} coups`)
+                el(
+                    'span',
+                    { class: 'meta' },
+                    `${REASONS[g.reason] ?? g.reason}, ${g.moves.length} coups, ${Math.round(g.duration_ms / 1000)} s`
+                )
             )
             if (replay.game?.id === g.id) button.setAttribute('aria-current', 'true')
             button.addEventListener('click', () => showGame(g, true))
@@ -307,16 +354,19 @@ function renderGames(list, deltas) {
 function showGame(g, pinned = replay.pinned) {
     stopPlayback()
     const steps = positions(g)
-    replay = { game: g, steps, index: steps.length - 1, timer: null, pinned }
+    // moveMs[k] : temps du coup moves[k], vide si absent ou incohérent.
+    const moveMs = g.move_ms?.length === g.moves.length ? g.move_ms : []
+    replay = { game: g, steps, moveMs, index: steps.length - 1, timer: null, pinned }
     setParam('game', pinned ? g.id : null)
     $('step').max = String(steps.length - 1)
 
     const loser = g.winner === 'red' ? 'black' : 'red'
     const ending = ENDINGS[g.reason]?.(g[loser].team) ?? g.reason
+    const name = (color) => [g[color].team, version(g[color])].filter(Boolean).join(' ')
     $('replay-info').replaceChildren(
-        el('strong', {}, g.red.team),
+        el('strong', {}, name('red')),
         ' (rouge) contre ',
-        el('strong', {}, g.black.team),
+        el('strong', {}, name('black')),
         ` (noir) : ${g[g.winner].team} gagne, ${ending}.`
     )
     for (const button of $('games').querySelectorAll('.game')) {
@@ -328,7 +378,7 @@ function showGame(g, pinned = replay.pinned) {
 }
 
 function drawStep() {
-    const { steps, index } = replay
+    const { steps, moveMs, index } = replay
     const step = steps[index]
     const board = $('board')
     const nodes = []
@@ -359,7 +409,10 @@ function drawStep() {
     $('step').value = String(index)
     if (step.move) {
         const { from, to, destroyed } = step.move
-        $('move-count').textContent = `Coup ${index} sur ${total}${step.opening ? ', ouverture' : ''}`
+        // Les coups des clients sont les derniers pas, après l'ouverture.
+        const ms = moveMs[index - (steps.length - moveMs.length)]
+        const detail = step.opening ? ', ouverture' : ms !== undefined ? `, ${ms} ms` : ''
+        $('move-count').textContent = `Coup ${index} sur ${total}${detail}`
         $('move-text').replaceChildren(
             `${squareName(from)} → ${squareName(to)} `,
             el('span', { class: 'destroyed' }, `détruit ${squareName(destroyed)}`)

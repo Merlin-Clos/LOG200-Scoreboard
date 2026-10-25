@@ -40,6 +40,9 @@ pub struct GameResult {
     #[serde(default)]
     pub invalid: InvalidCounts,
     pub duration_ms: u64,
+    /// Temps de réflexion de chaque coup de `moves`, même index. Absent chez d'autres arbitres.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub move_ms: Vec<u64>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
@@ -211,6 +214,7 @@ mod tests {
                 reason: Reason::Timeout,
                 invalid: InvalidCounts { red: 0, black: 1 },
                 duration_ms: 1234,
+                move_ms: vec![42],
             },
         }
     }
@@ -230,7 +234,7 @@ mod tests {
     fn jsonl_line_is_stable() {
         let game = sample();
         let expected = format!(
-            r#"{{"id":"g1","session":"test","ts":"2026-10-24T12:00:00.000Z","red":{{"team":"eq01","build":"abc"}},"black":{{"team":"eq02","anchor":true}},"v":1,"time_ms":500,"opening":[],"moves":["{}"],"winner":"red","reason":"timeout","invalid":{{"red":0,"black":1}},"duration_ms":1234}}"#,
+            r#"{{"id":"g1","session":"test","ts":"2026-10-24T12:00:00.000Z","red":{{"team":"eq01","build":"abc"}},"black":{{"team":"eq02","anchor":true}},"v":1,"time_ms":500,"opening":[],"moves":["{}"],"winner":"red","reason":"timeout","invalid":{{"red":0,"black":1}},"duration_ms":1234,"move_ms":[42]}}"#,
             game.result.moves[0]
         );
         assert_eq!(serde_json::to_string(&game).unwrap(), expected);

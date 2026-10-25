@@ -337,8 +337,14 @@ tbody tr:first-child .elo {
 
 .record,
 .last-col,
-.pct {
+.pct,
+.pace {
     color: var(--muted);
+}
+
+.pace.warn {
+    color: var(--red);
+    font-weight: 700;
 }
 
 .badge {
@@ -895,7 +901,8 @@ input[type='range'] {
     }
 
     .last-col,
-    .pct {
+    .pct,
+    .pace {
         display: none;
     }
 

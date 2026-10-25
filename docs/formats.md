@@ -83,7 +83,8 @@ Si une autre implémentation n'écrit pas `LISTENING` ni `CONNECTED red`, il suf
   "winner": "black",
   "reason": "no_moves",
   "invalid": { "red": 0, "black": 2 },
-  "duration_ms": 15100
+  "duration_ms": 15100,
+  "move_ms": [212, 480]
 }
 ```
 
@@ -97,6 +98,7 @@ Si une autre implémentation n'écrit pas `LISTENING` ni `CONNECTED red`, il suf
 | `reason` | chaîne | `no_moves` : le perdant n'avait plus de coup. `timeout` : temps dépassé. `disconnect` : connexion perdue. `protocol` : trop de coups invalides, si une limite est fixée. `no_show` : le perdant ne s'est jamais connecté (jar qui plante au démarrage, conteneur tué). |
 | `invalid` | objet | Nombre de coups refusés (`4`) par couleur. |
 | `duration_ms` | entier | Durée de la partie. |
+| `move_ms` | liste (facultatif) | Temps de chaque coup de `moves`, même index, de la demande de coup au coup accepté (coups refusés compris). Absent ou de longueur différente de `moves` : ignoré. |
 
 Avant d'enregistrer un résultat, le ladder rejoue la partie avec notre moteur ; un coup illégal ou un gagnant incohérent la fait rejeter.
 
@@ -118,7 +120,8 @@ Une ligne JSON par partie terminée, en ajout seul. Chaque ligne reprend l'objet
   "winner": "red",
   "reason": "no_moves",
   "invalid": { "red": 0, "black": 0 },
-  "duration_ms": 15100
+  "duration_ms": 15100,
+  "move_ms": [212, 480]
 }
 ```
 

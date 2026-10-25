@@ -89,6 +89,32 @@ export function computeRatings(games, session = null) {
         .sort((a, b) => b.rating - a.rating)
 }
 
+// Builds distincts de chaque equipe dans l'ordre d'apparition, toutes sessions : vN = index + 1.
+export function versions(games) {
+    const out = new Map()
+    const sorted = games.slice().sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
+    for (const g of sorted) {
+        for (const p of [g.red, g.black]) {
+            if (!p.build) continue
+            if (!out.has(p.team)) out.set(p.team, [])
+            if (!out.get(p.team).includes(p.build)) out.get(p.team).push(p.build)
+        }
+    }
+    return out
+}
+
+// Temps de reflexion des coups de `color` ; vide si absent ou incoherent. Le rouge joue les coups pairs.
+export function moveTimes(game, color) {
+    const ms = game.move_ms
+    if (!Array.isArray(ms) || ms.length !== game.moves.length) return []
+    return ms.filter((_, i) => i % 2 === (color === 'red' ? 0 : 1))
+}
+
+// Rang le plus proche, sur une liste triee non vide.
+export function percentile(sorted, p) {
+    return sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)]
+}
+
 export function sessions(games) {
     const latest = new Map()
     for (const g of games) {

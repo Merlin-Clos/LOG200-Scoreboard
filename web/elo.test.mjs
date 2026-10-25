@@ -1,7 +1,17 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { computeRatings, expected, parseJsonl, PROVISIONAL_GAMES, sessions, START } from './elo.js'
+import {
+    computeRatings,
+    expected,
+    moveTimes,
+    parseJsonl,
+    percentile,
+    PROVISIONAL_GAMES,
+    sessions,
+    START,
+    versions,
+} from './elo.js'
 import { BLACK, DESTROYED, EMPTY, positions, RED, squareIndex, squareName } from './replay.js'
 
 let clock = 0
@@ -77,6 +87,33 @@ test('games are processed in timestamp order and filtered by session', () => {
     assert.deepEqual(reversed, ordered)
     assert.equal(computeRatings([g1, g2], 's2')[0].games, 1)
     assert.deepEqual(sessions([g1, g2]), ['s2', 's1'])
+})
+
+test('versions number builds per team across sessions, reverting keeps the old number', () => {
+    const builds = ['h1', 'h2', 'h1', 'h3']
+    const list = builds.map((b, i) => {
+        const g = game('a', 'b', 'red', { session: `s${i}` })
+        g.red.build = b
+        return g
+    })
+    assert.deepEqual(versions(list.reverse()).get('a'), ['h1', 'h2', 'h3'])
+    assert.equal(versions(list).has('b'), false)
+})
+
+test('moveTimes splits by color and ignores missing or inconsistent data', () => {
+    const g = game('a', 'b', 'red', { moves: ['x', 'y', 'z'], move_ms: [10, 20, 30] })
+    assert.deepEqual(moveTimes(g, 'red'), [10, 30])
+    assert.deepEqual(moveTimes(g, 'black'), [20])
+    assert.deepEqual(moveTimes({ ...g, move_ms: [10] }, 'red'), [])
+    assert.deepEqual(moveTimes(game('a', 'b', 'red'), 'red'), [])
+})
+
+test('percentile uses nearest rank', () => {
+    const sorted = Array.from({ length: 100 }, (_, i) => i + 1)
+    assert.equal(percentile(sorted, 0.5), 50)
+    assert.equal(percentile(sorted, 0.95), 95)
+    assert.equal(percentile(sorted, 0.99), 99)
+    assert.equal(percentile([7], 0.99), 7)
 })
 
 test('parseJsonl skips truncated lines and unknown versions', () => {

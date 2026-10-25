@@ -69,7 +69,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
 
     let start = Instant::now();
     let connect_timeout = Duration::from_millis(cli.connect_timeout_ms);
-    let (verdict, moves, invalid) = match seat_players(&listener, connect_timeout, cli.time_ms, &board)? {
+    let (verdict, moves, move_ms, invalid) = match seat_players(&listener, connect_timeout, cli.time_ms, &board)? {
         Lobby::Ready(players) => {
             let mut referee = Referee {
                 board,
@@ -77,12 +77,13 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 time: Duration::from_millis(cli.time_ms),
                 max_invalid: cli.max_invalid,
                 moves: Vec::new(),
+                move_ms: Vec::new(),
                 invalid: InvalidCounts::default(),
             };
             let verdict = referee.run();
             referee.players.red.shutdown();
             referee.players.black.shutdown();
-            (verdict, referee.moves, referee.invalid)
+            (verdict, referee.moves, referee.move_ms, referee.invalid)
         }
         Lobby::NoShow { absent, red } => {
             // Le rouge déjà connecté apprend qu'il gagne, sans coup joué.
@@ -97,7 +98,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 winner: absent.other(),
                 reason: Reason::NoShow,
             };
-            (verdict, Vec::new(), InvalidCounts::default())
+            (verdict, Vec::new(), Vec::new(), InvalidCounts::default())
         }
     };
 
@@ -109,7 +110,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         winner: verdict.winner,
         reason: verdict.reason,
         invalid,
-        duration_ms: u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX),
+        duration_ms: millis(start),
+        move_ms,
     };
     eprintln!(
         "gagnant {} ({:?}) en {} coups",
@@ -119,6 +121,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     );
     println!("{}", serde_json::to_string(&result)?);
     Ok(())
+}
+
+fn millis(since: Instant) -> u64 {
+    u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Plateau après l'ouverture, qui doit laisser la main au rouge sans finir la partie.
@@ -208,6 +214,7 @@ struct Referee {
     time: Duration,
     max_invalid: u32,
     moves: Vec<Move>,
+    move_ms: Vec<u64>,
     invalid: InvalidCounts,
 }
 
@@ -226,6 +233,8 @@ impl Referee {
                 },
                 Some(&last) => ServerMsg::Request(Some(last)),
             };
+            // Temps compté contre le joueur : réseau et coups refusés compris.
+            let asked = Instant::now();
             if !self.send(turn, request) {
                 return self.forfeit(turn, Reason::Disconnect);
             }
@@ -235,6 +244,7 @@ impl Referee {
             };
             self.board.apply(mv);
             self.moves.push(mv);
+            self.move_ms.push(millis(asked));
             if let Some(winner) = rules::winner_after(&self.board, turn) {
                 for (color, outcome) in [(winner, Outcome::Win), (winner.other(), Outcome::Loss)] {
                     self.send(
