@@ -61,7 +61,7 @@ The referee contract and the JSONL format are described in `docs/formats.md`. An
 
 ## Build from source
 
-Only the bot uses full LTO and one codegen unit to guarantee the best performance. Other tools use normal release settings to avoid extra build time. The bot is built in `target/bot/`, the other binaries in `target/release/`.
+Only the bot uses full LTO and one codegen unit, giving the compiler more optimization opportunities. Other tools use normal release settings to avoid extra build time. The bot is built in `target/bot/`, the other binaries in `target/release/`.
 
 ```sh
 cargo build --release --bin isolation-referee --bin isolation-ladder --bin isolation-check
