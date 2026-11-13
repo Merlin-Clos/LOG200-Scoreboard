@@ -1,8 +1,5 @@
 // Page du ladder : classement et dernières parties de summary.json, parties des équipes choisies
 // dans teams/, replay lu partie par partie sur /api/games/<id>.
-// ?session=, ?teams=, ?match=, ?window=, ?verified=, ?pace=, ?record=, ?elo=, ?sort=, ?order=, ?side=,
-// ?archives= et ?game= suivent les choix de la page : l'adresse se partage telle quelle.
-// ?team= des anciens liens vaut ?teams= avec cette seule équipe.
 
 import { LiveStatus } from '@/components/controls/live-status';
 import { SessionSelect, sessionOptions } from '@/components/controls/session-select';
@@ -41,7 +38,8 @@ const MATCH_OPTIONS = [
   { value: BETWEEN, label: 'Entre elles' },
 ];
 
-const outside = (g: TGameRow, session: string) => session === GLOBAL && Boolean(g.tournament);
+const inGameScope = (g: TGameRow, session: string, verified: boolean) =>
+  (!verified || !isRemote(g)) && (session !== GLOBAL || !g.tournament);
 
 const ClassementPage = () => {
   const { data: summary, error, dataUpdatedAt } = useGetSummary();
@@ -49,7 +47,6 @@ const ClassementPage = () => {
   const { data: model } = useGetModel();
   const { replay, actions } = useReplay();
 
-  // Valeurs de l'adresse au chargement.
   const [initial] = useState(searchParams);
   const linkedGame = initial.get('game');
 
@@ -111,16 +108,14 @@ const ClassementPage = () => {
   const list = useMemo(() => {
     if (!scope) return [];
     if (!teams.length) return scope.recent;
-    return gamesOf(rows ?? new Map(), teams, { mode: match, session }).filter(
-      (g) => (!verified || !isRemote(g)) && !outside(g, session)
-    );
+    return gamesOf(rows ?? new Map(), teams, { mode: match, session }).filter((g) => inGameScope(g, session, verified));
   }, [scope, teams, rows, match, session, verified]);
 
   const duelGames = useMemo(
     () =>
       teams.length === 2
         ? gamesOf(rows ?? new Map(), teams, { mode: BETWEEN, session }).filter(
-            (g) => (!verified || !isRemote(g)) && !outside(g, session)
+            (g) => inGameScope(g, session, verified)
           )
         : [],
     [teams, rows, session, verified]
@@ -169,9 +164,7 @@ const ClassementPage = () => {
     const r = actions.current();
     const g = r.pinned
       ? live.games.get(r.id ?? linkedGame ?? '')
-      : teams.length
-        ? pickLive(live.games, teams, teams.length > 1 && match === BETWEEN)
-        : undefined;
+      : pickLive(live.games, teams, match === BETWEEN);
     if (g) actions.showLive(g);
     return Boolean(g);
   }, [liveWanted, live.games, teams, match, linkedGame, actions]);
@@ -191,12 +184,10 @@ const ClassementPage = () => {
     if (!followLive() && newer && !r.pinned && r.id !== latest.id) actions.showGame(latest);
   }, [summary, dataUpdatedAt, list, replay.pinned, followLive, actions]);
 
-  const reselect = () => actions.unpin();
-
   const chooseTeams = (next: string[]) => {
     setChosen(next);
     setParam('teams', next.join(','));
-    reselect();
+    actions.unpin();
   };
 
   const time = scope?.recent.at(-1)?.time_ms;
@@ -214,7 +205,7 @@ const ClassementPage = () => {
           checked={verifiedParam === '1'}
           onChange={(checked) => {
             setVerifiedParam(checked ? '1' : null);
-            reselect();
+            actions.unpin();
           }}
         />
         <SessionSelect
@@ -222,7 +213,7 @@ const ClassementPage = () => {
           options={sessionOptions(summary?.sessions)}
           onChange={(value) => {
             setSessionChoice(value);
-            reselect();
+            actions.unpin();
           }}
         />
         <LiveStatus dot={error ? 'error' : summary ? 'on' : ''} text={status} pulses={pulses} />
@@ -288,14 +279,13 @@ const ClassementPage = () => {
               ) : (
                 <WindowRadio
                   id="match"
-                  className="match"
                   name="match"
                   label="Parties montrées"
                   value={match}
                   options={MATCH_OPTIONS}
                   onChange={(value) => {
                     setMatchParam(value);
-                    reselect();
+                    actions.unpin();
                   }}
                 />
               )}

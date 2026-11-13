@@ -1,8 +1,7 @@
 import type { TRankingRow } from '@/lib/archives';
 import type { TPaceStat, TTeamRating } from '@/types/summary.types';
 
-// Mesures des colonnes : libellé et titre.
-export const PACE_STATS: Record<TPaceStat, [string, string]> = {
+export const PACE_STATS: Record<TPaceStat, [label: string, title: string]> = {
   mean: ['moy.', 'Temps moyen par coup'],
   p50: ['méd.', 'Temps médian par coup'],
   p95: ['p95', '95e centile du temps par coup'],

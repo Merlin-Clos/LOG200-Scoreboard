@@ -1,4 +1,3 @@
-import { cn } from '@/lib/utils';
 import type { FC } from 'react';
 
 type Props = {
@@ -8,14 +7,11 @@ type Props = {
   value: string;
   options: { value: string; label: string }[];
   onChange: (value: string) => void;
-  hidden?: boolean;
-  className?: string;
 };
 
-// Boutons radio en pastilles : fenêtre des graphes, parties montrées.
-const WindowRadio: FC<Props> = ({ id, name, label, value, options, onChange, hidden, className }) => {
+const WindowRadio: FC<Props> = ({ id, name, label, value, options, onChange }) => {
   return (
-    <div id={id} className={cn('elo-window', className)} role="radiogroup" aria-label={label} hidden={hidden}>
+    <div id={id} className="elo-window" role="radiogroup" aria-label={label}>
       {options.map((o) => (
         <label key={o.value}>
           <input

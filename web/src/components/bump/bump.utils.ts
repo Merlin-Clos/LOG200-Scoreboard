@@ -2,14 +2,14 @@ import { smooth, type TRankPoint } from '@/lib/bump';
 import { dayFormat, timeFormat } from '@/lib/format';
 import type { TRatingRow } from '@/types/games.types';
 
-export const MARGIN = { top: 18, right: 96, bottom: 28, left: 36 };
+const MARGIN = { top: 18, right: 96, bottom: 28, left: 36 };
 // Pixels par partie en dessous desquels le rang est lissé, et largeur d'un paquet lissé.
-export const EXACT_PX = 4;
-export const BUCKET_PX = 12;
+const EXACT_PX = 4;
+const BUCKET_PX = 12;
 // Couleurs --series-1 à --series-10, répétées au-delà.
 const COLORS = 10;
 
-export type TVertex = [number, number];
+type TVertex = [number, number];
 export type TChartMetric = 'rank' | 'rating';
 
 // Équipe vers son emplacement de couleur, pour toute la page : une équipe garde sa couleur.
@@ -28,19 +28,55 @@ export function colorOf(team: string, selected: string[]) {
 }
 
 // Sommets [colonne, rang ou Elo] de la ligne. Valeur exacte : palier, puis diagonale sur une partie.
-export function vertices(points: TRankPoint[], count: number, buckets: number, metric: TChartMetric) {
-  const line = metric === 'rank' ? smooth(points, count, buckets) : points;
+function vertices(points: TRankPoint[], count: number, buckets: number, metric: TChartMetric) {
   const path: TVertex[] = [];
-  if (line === points) {
+  if (metric === 'rating' || count <= buckets) {
     points.forEach((p, i) => {
       if (i) path.push([Math.max(p.x - 1, points[i - 1].x), points[i - 1][metric]]);
       path.push([p.x, p[metric]]);
     });
   } else {
+    const line = smooth(points, count, buckets);
     path.push([points[0].x, line[0].rank], ...line.map((p): TVertex => [p.x, p.rank]));
   }
   path.push([count - 1, path[path.length - 1][1]]);
   return path;
+}
+
+export function chartGeometry(
+  count: number,
+  series: Map<string, TRankPoint[]>,
+  selected: string[],
+  metric: TChartMetric,
+  { width, height }: { width: number; height: number }
+) {
+  const drawn = selected.filter((t) => series.get(t)?.length);
+  if (!count || !drawn.length) return null;
+
+  const margin = { ...MARGIN, left: metric === 'rating' ? 52 : MARGIN.left };
+  let min = Infinity;
+  let max = -Infinity;
+  for (const team of drawn) {
+    for (const point of series.get(team)!) {
+      min = Math.min(min, point[metric]);
+      max = Math.max(max, point[metric]);
+    }
+  }
+  const inner = { w: width - margin.left - margin.right, h: height - margin.top - margin.bottom };
+  const unit = metric === 'rating' ? 10 : 1;
+  const step = Math.max(unit, Math.ceil((max - min) / Math.max(1, Math.floor(inner.h / 28)) / unit) * unit);
+  const low = metric === 'rank' ? Math.floor(min) : Math.floor(min / step) * step;
+  const high = metric === 'rank' ? Math.ceil(max) : Math.ceil(max / step) * step;
+  const ticks = Array.from({ length: Math.floor((high - low) / step) + 1 }, (_, i) => low + i * step);
+  const x = (col: number) => margin.left + (count > 1 ? (col / (count - 1)) * inner.w : inner.w / 2);
+  const y = (value: number) => {
+    const fraction = high > low ? (value - low) / (high - low) : 0.5;
+    return margin.top + (metric === 'rank' ? fraction : 1 - fraction) * inner.h;
+  };
+  const buckets = count * EXACT_PX <= inner.w ? count : Math.floor(inner.w / BUCKET_PX);
+  const paths = new Map<string, TVertex[]>();
+  for (const team of drawn) paths.set(team, vertices(series.get(team)!, count, buckets, metric));
+  return { x, y, inner, margin, width, height, ticks, drawn, paintOrder: [...drawn].reverse(), paths };
 }
 
 // Rang ou Elo interpolé de la ligne à `col` : un nœud se pose sur la ligne, même lissée.
@@ -51,7 +87,6 @@ export function valueAt(path: TVertex[], col: number) {
   return c1 === c0 ? r1 : r0 + ((r1 - r0) * (col - c0)) / (c1 - c0);
 }
 
-// Cinq dates au plus, une par 100 px.
 export function dateTicks(columns: TRatingRow[], width: number) {
   const span = Date.parse(columns[columns.length - 1].ts) - Date.parse(columns[0].ts);
   const format = span < 864e5 ? timeFormat : dayFormat;

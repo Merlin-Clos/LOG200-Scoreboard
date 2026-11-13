@@ -114,7 +114,7 @@ test('smooth averages the rank over each bucket, from the start of the branch', 
     ])
     const flips = Array.from({ length: 12 }, (_, x) => ({ x, rank: (x % 2) + 1 }))
     assert.deepEqual(smooth(flips, 12, 3).map((p) => p.rank), [1.5, 1.5, 1.5])
-    assert.equal(smooth(points, 20, 40), points)
+    assert.deepEqual(smooth(points, 20, 40), points)
 })
 
 test('verified skips remote games and uses verified ratings', () => {

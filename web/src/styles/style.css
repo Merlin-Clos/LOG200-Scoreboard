@@ -366,7 +366,7 @@ h2,
     display: none;
 }
 
-/* Sans barre, une ligne coupée sous un dégradé gris dit qu'il y en a d'autres. */
+/* Une ligne coupée sous un dégradé gris dit qu'il y en a d'autres. */
 .scroll::before,
 .scroll::after {
     content: '';
@@ -471,8 +471,9 @@ table {
 }
 
 .ranking-scroll {
+    --team-column-width: 12rem;
     max-width: 100%;
-    scroll-padding-inline-start: 12rem;
+    scroll-padding-inline-start: var(--team-column-width);
     scrollbar-width: thin;
     scrollbar-color: var(--muted) var(--surface);
 }
@@ -530,9 +531,9 @@ tbody tr:last-child td {
     position: sticky;
     left: 0;
     z-index: 2;
-    min-width: 12rem;
-    width: 12rem;
-    max-width: 12rem;
+    min-width: var(--team-column-width);
+    width: var(--team-column-width);
+    max-width: var(--team-column-width);
     background: var(--surface);
 }
 
@@ -722,10 +723,6 @@ th[aria-sort] {
 
 .pace.warn {
     font-weight: 700;
-}
-
-.ranking {
-    container: ranking / inline-size;
 }
 
 .badge {
@@ -1273,12 +1270,14 @@ input[type='range'] {
     margin-bottom: 10px;
 }
 
-.games-controls .match {
-    margin-top: 0;
+.games-controls .elo-window {
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
 }
 
-/* Leur display l'emporterait sur l'attribut hidden. */
-.elo-window[hidden],
+/* Son display l'emporterait sur l'attribut hidden. */
 .verified[hidden] {
     display: none;
 }
@@ -1323,7 +1322,6 @@ input[type='range'] {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
-    margin-top: 8px;
 }
 
 .elo-window label {
@@ -1362,8 +1360,6 @@ input[type='range'] {
     color: var(--muted);
 }
 
-/* --- Graphe des rangs et de l'Elo -------------------------------------------------------------- */
-
 /* Plus précis que les grilles de .layout des media queries. */
 .layout.graph-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -1384,10 +1380,6 @@ input[type='range'] {
     justify-content: space-between;
     gap: 8px 16px;
     margin-bottom: 10px;
-}
-
-.bump-head .elo-window {
-    margin-top: 0;
 }
 
 .bump-pick {
@@ -2342,8 +2334,7 @@ input[type='range'] {
     }
 }
 
-/* --- File d'attente (bouton « File d’attente ») ------------------------------------------------
-   L'arbre parle la langue du plateau : une équipe est une case, un bot une case vide, la prochaine
+/* L'arbre parle la langue du plateau : une équipe est une case, un bot une case vide, la prochaine
    à jouer prend le rouge du trait, et une équipe en partie porte son pion. */
 
 .queue {

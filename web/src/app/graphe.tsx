@@ -1,7 +1,5 @@
 // Page graphe : rang ou Elo des équipes choisies après chaque partie, rejoué depuis
 // timeline.jsonl ; un nœud marque chaque nouvelle version de jar.
-// ?session=, ?teams=, ?window=, ?verified= et ?metric= suivent les choix de la page : l'adresse se partage
-// telle quelle.
 
 import { BumpChart } from '@/components/bump/bump-chart';
 import { colorOf } from '@/components/bump/bump.utils';

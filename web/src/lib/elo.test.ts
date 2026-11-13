@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { BETWEEN, gamesOf, isRemote, parseJsonl, ratingOf, record, since, START, versionStarts } from './elo.ts'
+import { BETWEEN, gamesOf, isRemote, parseJsonl, ratingOf, record } from './elo.ts'
 import { BLACK, DESTROYED, EMPTY, positions, RED, squareIndex, squareName } from './replay.ts'
 
 let clock = 0
@@ -42,14 +42,6 @@ test('replay squares follow server indices', () => {
     assert.ok(steps[1].opening && !steps[2].opening)
 })
 
-test('since starts from the rating just before the cutoff', () => {
-    const history = [1, 2, 3].map((i) => ({ ts: `2026-10-24T12:00:0${i}.000Z`, rating: START + 10 * i }))
-    const at = (i) => Date.parse(history[i].ts)
-    assert.deepEqual(since(history, -Infinity), { start: START, points: history })
-    assert.deepEqual(since(history, at(1)), { start: history[0].rating, points: history.slice(1) })
-    assert.deepEqual(since(history, at(2) + 1), { start: history[2].rating, points: [] })
-})
-
 test('gamesOf merges team files once each, in game order, with both modes', () => {
     const ab = game('a', 'b', 'red')
     const ac = game('a', 'c', 'black')
@@ -67,12 +59,6 @@ test('gamesOf merges team files once each, in game order, with both modes', () =
     assert.deepEqual(ids(gamesOf(files, ['b', 'c'], { mode: BETWEEN, session: 's2' })), ids([bc]))
     assert.deepEqual(ids(gamesOf(files, ['c'], { mode: BETWEEN })), ids([ac, bc, cd]))
     assert.deepEqual(gamesOf(files, []), [])
-})
-
-test('versionStarts marks each new build after the first entry', () => {
-    const history = ['a', 'a', 'b', 'b', undefined, 'c'].map((build) => ({ build }))
-    assert.deepEqual(versionStarts(history), [2, 5])
-    assert.deepEqual(versionStarts([{ build: 'a' }]), [])
 })
 
 test('ratingOf reads verified ratings only when asked and present', () => {

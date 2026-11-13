@@ -1,8 +1,6 @@
-// Le classement Elo est calcule par le ladder (src/bin/ladder/standings.rs).
+// Le classement Elo est calcule par le ladder (crates/isolation-ladder/src/standings/).
 
 import type { TGameRow, TRatingChange, TRatingKey, TSide } from '../types/games.types';
-
-export const START = 1500;
 
 // Lignes illisibles (dont une derniere ligne en cours d'ecriture) et versions inconnues ignorees.
 export function parseJsonl<T extends { v: number } = TGameRow>(text: string) {
@@ -19,15 +17,6 @@ export function parseJsonl<T extends { v: number } = TGameRow>(text: string) {
     }
   }
   return { games, skipped };
-}
-
-type THistoryPoint = { ts: string; rating: number };
-
-// Historique d'une equipe a partir de `cutoff` (ms) : rating juste avant, puis les entrees suivantes.
-export function since<T extends THistoryPoint>(history: T[], cutoff: number) {
-  const i = history.findIndex((h) => Date.parse(h.ts) >= cutoff);
-  const first = i === -1 ? history.length : i;
-  return { start: history[first - 1]?.rating ?? START, points: history.slice(first) };
 }
 
 export const BETWEEN = 'entre';
@@ -73,12 +62,4 @@ export function record(games: TGameRow[], team: string, opponent: string, build?
     if (g.winner === color) wins++;
   }
   return { wins, games: played };
-}
-
-export function versionStarts(history: { build?: string }[]) {
-  const starts: number[] = [];
-  for (let k = 1; k < history.length; k++) {
-    if (history[k].build && history[k].build !== history[k - 1].build) starts.push(k);
-  }
-  return starts;
 }

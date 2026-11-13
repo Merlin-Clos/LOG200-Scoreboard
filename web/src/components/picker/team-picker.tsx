@@ -1,5 +1,3 @@
-// Champ à puces des équipes (motif ARIA combobox).
-
 import { ChevronDownIcon, CloseIcon } from '@/components/icons/icons';
 import { cn } from '@/lib/utils';
 import type { TTeamRating } from '@/types/summary.types';
@@ -13,12 +11,11 @@ type Props = {
   placeholder: string;
   chipsLabel: string;
   className?: string;
-  // Pastille colorée, aucune sans.
   color?: (team: string) => string;
-  // Puce grisée.
   idle?: (team: string) => boolean;
 };
 
+// On iOS, cancelling touch pointerdown or closing on a null blur can prevent option activation.
 const keepMouseFocus: PointerEventHandler<HTMLElement> = (e) => {
   if (e.pointerType === 'mouse') e.preventDefault();
 };
@@ -137,7 +134,6 @@ const TeamPicker: FC<Props> = ({ ratings, selected, onChange, placeholder, chips
         }}
         onKeyDown={handleKeyDown}
       />
-      {/* À la souris, les boutons du cadre gardent le focus dans le champ. */}
       <button
         id="picker-clear"
         className="picker-icon"
@@ -179,7 +175,6 @@ const TeamPicker: FC<Props> = ({ ratings, selected, onChange, placeholder, chips
               role="option"
               className="picker-option"
               aria-selected={i === current}
-              // À la souris, garde le focus dans le champ pour en ajouter d'autres.
               onPointerDown={keepMouseFocus}
               onClick={() => add(r.team)}
             >

@@ -15,7 +15,7 @@ export type TRankPoint = {
   bot: boolean;
 };
 
-export type TSmoothPoint = { x: number; rank: number };
+type TSmoothPoint = { x: number; rank: number };
 
 export function topTeams(ratings: { team: string; build?: string }[], n = TOP) {
   return ratings
@@ -92,7 +92,7 @@ export function pointAt<T extends { x: number }>(points: T[], x: number): T | un
 }
 
 // Rang moyen par paquet quand `count` colonnes ne tiennent pas en `buckets`, sinon la série telle quelle.
-export function smooth(points: TRankPoint[], count: number, buckets: number): TRankPoint[] | TSmoothPoint[] {
+export function smooth(points: TRankPoint[], count: number, buckets: number): TSmoothPoint[] {
   if (count <= buckets || !points.length) return points;
   const out: TSmoothPoint[] = [];
   const size = count / buckets;

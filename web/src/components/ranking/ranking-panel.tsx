@@ -88,7 +88,6 @@ const RankingPanel: FC<Props> = ({
       duels.set(g.black, { id: g.id, opponent: g.red, color: 'black', chance: winProbability(model, g.black, g.red, 'black') });
   }
   const { rows: sorted, ranks } = rankingView(ratings, sort, { elo: eloStat, record: recordStat, pace: paceStat });
-  const listed = new Set(ranks.keys());
 
   const showOpponent = (e: SyntheticEvent) => setOpponent(opponentOf(e));
   const clearOpponent = () => setOpponent(null);
@@ -186,35 +185,24 @@ const RankingPanel: FC<Props> = ({
             onClick={goToOpponent}
           >
             {sorted.map((r) => {
-              if (r.archived)
-                return (
-                  <RankingRow
-                    key={`${r.team}@${r.build}`}
-                    rating={r}
-                    version={versionOf(r.team, r.build)}
-                    opponentListed={false}
-                    eloStat={eloStat}
-                    recordStat={recordStat}
-                    paceStat={paceStat}
-                  />
-                );
-              const duel = duels.get(r.team);
+              const active = !r.archived;
+              const duel = active ? duels.get(r.team) : undefined;
               return (
                 <RankingRow
-                  key={r.team}
-                  ref={(node) => {
+                  key={active ? r.team : `${r.team}@${r.build}`}
+                  ref={active ? (node) => {
                     if (node) rows.current.set(r.team, node);
                     else rows.current.delete(r.team);
-                  }}
-                  rank={ranks.get(r.team)}
+                  } : undefined}
+                  rank={active ? ranks.get(r.team) : undefined}
                   rating={r}
                   version={versionOf(r.team, r.build)}
                   duel={duel}
-                  opponentListed={Boolean(duel && listed.has(duel.opponent))}
+                  opponentListed={Boolean(duel && ranks.has(duel.opponent))}
                   eloStat={eloStat}
                   recordStat={recordStat}
                   paceStat={paceStat}
-                  highlight={ping === r.team ? 'ping' : opponent === r.team ? 'opponent' : undefined}
+                  highlight={active ? (ping === r.team ? 'ping' : opponent === r.team ? 'opponent' : undefined) : undefined}
                 />
               );
             })}

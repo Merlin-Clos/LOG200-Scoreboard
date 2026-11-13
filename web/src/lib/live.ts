@@ -57,9 +57,10 @@ export function forget(games: TLiveGames, now: number): TLiveGames {
 }
 
 export function pickLive(games: TLiveGames, teams: string[], between: boolean) {
+  const both = between && teams.length > 1;
   const plays = (team: string) => teams.includes(team);
   const fits = (g: TLiveGame) =>
-    !g.ended && (between ? plays(g.red) && plays(g.black) : plays(g.red) || plays(g.black));
+    !g.ended && (both ? plays(g.red) && plays(g.black) : plays(g.red) || plays(g.black));
   return [...games.values()].filter(fits).sort((a, b) => (a.since < b.since ? 1 : -1))[0];
 }
 

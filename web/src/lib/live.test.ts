@@ -57,6 +57,7 @@ test("la partie suivie est la plus récente des équipes choisies, selon le filt
         ['g3', game('g3', { red: 'a', black: 'd', since: '2026-11-01T10:09:00Z', ended: { winner: 'red' } })],
     ])
     assert.equal(pickLive(games, ['a'], false).id, 'g2', 'la plus récente non finie')
+    assert.equal(pickLive(games, ['a'], true).id, 'g2', 'entre elles avec une seule équipe garde ses parties')
     assert.equal(pickLive(games, ['a', 'b'], true).id, 'g1', 'entre elles : les deux équipes choisies')
     assert.equal(pickLive(games, ['d'], false), undefined, 'partie finie exclue')
     assert.equal(pickLive(games, [], false), undefined)

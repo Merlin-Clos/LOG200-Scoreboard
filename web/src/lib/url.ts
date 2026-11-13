@@ -13,7 +13,7 @@ export function setParam(key: string, value: string | null | undefined, keepEmpt
 
 // Adresse d'une autre page, avec les choix communs aux pages et les paramètres de `extra`.
 // Une valeur vide reste dans l'adresse (aucune équipe, toutes les sessions).
-export function pageUrl(href: string, extra: Record<string, string | null | undefined> = {}) {
+export function pageUrl(href: string, extra: Record<string, string> = {}) {
   const url = new URL(href, location.href);
   const here = searchParams();
   for (const key of [
@@ -22,10 +22,7 @@ export function pageUrl(href: string, extra: Record<string, string | null | unde
     const value = here.get(key);
     if (value !== null) url.searchParams.set(key, value);
   }
-  for (const [key, value] of Object.entries(extra)) {
-    if (value === null) url.searchParams.delete(key);
-    else if (value !== undefined) url.searchParams.set(key, value);
-  }
+  for (const [key, value] of Object.entries(extra)) url.searchParams.set(key, value);
   url.search = url.searchParams.toString().replaceAll('%2C', ',');
   return url.href;
 }

@@ -25,8 +25,8 @@ const GameItem: FC<Props> = ({ game: g, rating, current, selectedTeam, sideOrder
   }
   const right: TColor = left === 'red' ? 'black' : 'red';
   const change = (color: TColor) => roundDelta(rating(g[color])[1]);
-  const who = (color: TColor, name: string) =>
-    `${g[color].team} (${name}${g[color].remote ? ', distant' : ''}${change(color) ? `, ${signed(change(color))}` : ''})`;
+  const who = (color: TColor) =>
+    `${g[color].team} (${color === 'red' ? 'rouge' : 'noir'}${g[color].remote ? ', distant' : ''}${change(color) ? `, ${signed(change(color))}` : ''})`;
 
   const side = (color: TColor) => {
     const d = change(color);
@@ -49,7 +49,7 @@ const GameItem: FC<Props> = ({ game: g, rating, current, selectedTeam, sideOrder
         type="button"
         className="game"
         data-id={g.id}
-        aria-label={`${who(left, left === 'red' ? 'rouge' : 'noir')} contre ${who(right, right === 'red' ? 'rouge' : 'noir')}, ${g[g.winner].team} gagne`}
+        aria-label={`${who(left)} contre ${who(right)}, ${g[g.winner].team} gagne`}
         aria-current={current ? 'true' : undefined}
         onClick={() => onSelect(g)}
       >

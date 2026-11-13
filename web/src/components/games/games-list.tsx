@@ -15,7 +15,6 @@ type Props = {
   onSelect: (game: TGameRow) => void;
 };
 
-// Les plus récentes d'abord.
 const GamesList: FC<Props> = ({ games, rating, currentId, selectedTeam, sideOrder, onSelect }) => {
   const ref = useRef<HTMLOListElement>(null);
   const scroll = useScrollEdges(ref);

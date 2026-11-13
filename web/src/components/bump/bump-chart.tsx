@@ -1,5 +1,3 @@
-// Rang ou Elo des équipes choisies après chaque partie ; un nœud marque chaque nouvelle version de jar.
-
 import { pointAt, type TRankPoint } from '@/lib/bump';
 import { dayFormat, fullFormat, ordinal } from '@/lib/format';
 import { pageUrl } from '@/lib/url';
@@ -14,7 +12,7 @@ import {
   type FC,
   type KeyboardEvent,
 } from 'react';
-import { BUCKET_PX, dateTicks, EXACT_PX, MARGIN, valueAt, vertices, type TChartMetric, type TVertex } from './bump.utils';
+import { chartGeometry, dateTicks, valueAt, type TChartMetric } from './bump.utils';
 
 type Props = {
   columns: TRatingRow[];
@@ -35,7 +33,6 @@ const BumpChart: FC<Props> = ({ columns, series, selected, metric, palette, vers
   const [size, setSize] = useState({ width: 240, height: 200 });
   const [hover, setHover] = useState<THover>({ col: null, team: null });
 
-  // Un redimensionnement redessine sans rejouer la timeline.
   useLayoutEffect(() => {
     const node = plot.current!;
     const observer = new ResizeObserver(() => {
@@ -46,39 +43,10 @@ const BumpChart: FC<Props> = ({ columns, series, selected, metric, palette, vers
     return () => observer.disconnect();
   }, []);
 
-  const geom = useMemo(() => {
-    const { width, height } = size;
-    const drawn = selected.filter((t) => series.get(t)?.length);
-    if (!columns.length || !drawn.length) return null;
-
-    const margin = { ...MARGIN, left: metric === 'rating' ? 52 : MARGIN.left };
-    let min = Infinity;
-    let max = -Infinity;
-    for (const team of drawn) {
-      for (const point of series.get(team)!) {
-        min = Math.min(min, point[metric]);
-        max = Math.max(max, point[metric]);
-      }
-    }
-    const inner = { w: width - margin.left - margin.right, h: height - margin.top - margin.bottom };
-    const unit = metric === 'rating' ? 10 : 1;
-    const step = Math.max(unit, Math.ceil((max - min) / Math.max(1, Math.floor(inner.h / 28)) / unit) * unit);
-    const low = metric === 'rank' ? Math.floor(min) : Math.floor(min / step) * step;
-    const high = metric === 'rank' ? Math.ceil(max) : Math.ceil(max / step) * step;
-    const ticks = Array.from({ length: Math.floor((high - low) / step) + 1 }, (_, i) => low + i * step);
-    const x = (col: number) => margin.left + (columns.length > 1 ? (col / (columns.length - 1)) * inner.w : inner.w / 2);
-    const y = (value: number) => {
-      const fraction = high > low ? (value - low) / (high - low) : 0.5;
-      return margin.top + (metric === 'rank' ? fraction : 1 - fraction) * inner.h;
-    };
-    const buckets = columns.length * EXACT_PX <= inner.w ? columns.length : Math.floor(inner.w / BUCKET_PX);
-    const paths = new Map<string, TVertex[]>();
-    for (const team of drawn) {
-      const points = series.get(team)!;
-      paths.set(team, vertices(points, columns.length, buckets, metric));
-    }
-    return { x, y, inner, margin, width, height, ticks, drawn, paths };
-  }, [columns, series, selected, metric, size]);
+  const geom = useMemo(
+    () => chartGeometry(columns.length, series, selected, metric, size),
+    [columns, series, selected, metric, size]
+  );
 
   // Rang ou Elo exact, pas lissé, meilleure d'abord.
   const standingsAt = (col: number) =>
@@ -87,12 +55,19 @@ const BumpChart: FC<Props> = ({ columns, series, selected, metric, palette, vers
       .filter((r): r is { team: string; p: TRankPoint; before: TRankPoint | undefined } => Boolean(r.p))
       .sort((a, b) => metric === 'rank' ? a.p.rank - b.p.rank : b.p.rating - a.p.rating || a.p.rank - b.p.rank);
 
-  const showAt = (col: number, team = hover.team) => {
-    if (!geom) return hide();
-    col = Math.max(0, Math.min(columns.length - 1, col));
+  const clampColumn = (col: number) => Math.max(0, Math.min(columns.length - 1, col));
+
+  const inspectAt = (col: number, team: string | null) => {
+    col = clampColumn(col);
     const rows = standingsAt(col);
     if (!rows.some((r) => r.team === team)) team = rows[0]?.team ?? null;
-    setHover({ col, team });
+    return { col, team, rows };
+  };
+
+  const showAt = (col: number, team = hover.team) => {
+    if (!geom) return hide();
+    const next = inspectAt(col, team);
+    setHover({ col: next.col, team: next.team });
   };
 
   const hide = () => {
@@ -104,7 +79,7 @@ const BumpChart: FC<Props> = ({ columns, series, selected, metric, palette, vers
     const px = e.clientX - box.left;
     const py = e.clientY - box.top;
     const col = Math.round(((px - geom!.margin.left) / geom!.inner.w) * (columns.length - 1));
-    const at = Math.max(0, Math.min(columns.length - 1, col));
+    const at = clampColumn(col);
     let team: string | null = null;
     let best = Infinity;
     for (const [t, path] of geom!.paths) {
@@ -142,9 +117,10 @@ const BumpChart: FC<Props> = ({ columns, series, selected, metric, palette, vers
   };
 
   // Point visé, recalé sur le dessin du moment : il a pu changer depuis.
-  const col = geom && hover.col !== null ? Math.max(0, Math.min(columns.length - 1, hover.col)) : null;
-  const rows = col === null ? [] : standingsAt(col);
-  const team = col === null ? null : rows.some((r) => r.team === hover.team) ? hover.team : (rows[0]?.team ?? null);
+  const inspection = geom && hover.col !== null ? inspectAt(hover.col, hover.team) : null;
+  const col = inspection?.col ?? null;
+  const rows = inspection?.rows ?? [];
+  const team = inspection?.team ?? null;
   const game = col === null ? null : columns[col];
   // Session deltas also describe tournament games, whose global deltas are both zero.
   const winner = game && game.red.session[1] !== game.black.session[1]
@@ -241,9 +217,8 @@ const BumpChart: FC<Props> = ({ columns, series, selected, metric, palette, vers
                   </text>
                 ))}
               </g>
-              {/* Les lignes du haut du classement sont dessinées en dernier, au-dessus des autres. */}
               <g className="bump-lines">
-                {[...geom.drawn].reverse().map((t) => {
+                {geom.paintOrder.map((t) => {
                   const path = geom.paths.get(t)!;
                   const d = path.map(([c, value], i) => `${i ? 'L' : 'M'}${geom.x(c)},${geom.y(value)}`).join('');
                   return (
@@ -258,13 +233,12 @@ const BumpChart: FC<Props> = ({ columns, series, selected, metric, palette, vers
                 })}
               </g>
               <g className="bump-nodes">
-                {[...geom.drawn].reverse().map((t) => {
+                {geom.paintOrder.map((t) => {
                   const points = series.get(t)!;
                   const path = geom.paths.get(t)!;
                   const fill = { fill: palette.get(t) ?? muted };
                   return (
                     <Fragment key={t}>
-                      {/* Départ de branche dans la fenêtre. */}
                       {points[0].x > 0 && (
                         <circle
                           cx={geom.x(path[0][0])}
@@ -300,7 +274,7 @@ const BumpChart: FC<Props> = ({ columns, series, selected, metric, palette, vers
                 })}
               </g>
               <g className="bump-labels">
-                {[...geom.drawn].reverse().map((t) => {
+                {geom.paintOrder.map((t) => {
                   const path = geom.paths.get(t)!;
                   return (
                     <g
