@@ -56,12 +56,13 @@ export function forget(games: TLiveGames, now: number): TLiveGames {
   return kept.length === games.size ? games : new Map(kept);
 }
 
-export function pickLive(games: TLiveGames, teams: string[], between: boolean) {
+export function pickLive(games: TLiveGames, teams: string[], between: boolean, shownId?: string) {
   const both = between && teams.length > 1;
   const plays = (team: string) => teams.includes(team);
-  const fits = (g: TLiveGame) =>
-    !g.ended && (both ? plays(g.red) && plays(g.black) : plays(g.red) || plays(g.black));
-  return [...games.values()].filter(fits).sort((a, b) => (a.since < b.since ? 1 : -1))[0];
+  const fits = (g: TLiveGame) => both ? plays(g.red) && plays(g.black) : plays(g.red) || plays(g.black);
+  const playing = [...games.values()].filter((g) => !g.ended && fits(g)).sort((a, b) => (a.since < b.since ? 1 : -1))[0];
+  const shown = shownId ? games.get(shownId) : undefined;
+  return playing ?? (shown && fits(shown) ? shown : undefined);
 }
 
 export const mover = (g: TLiveGame): TColor => ((g.opening.length + g.moves.length) % 2 === 0 ? 'red' : 'black');

@@ -164,7 +164,7 @@ const ClassementPage = () => {
     const r = actions.current();
     const g = r.pinned
       ? live.games.get(r.id ?? linkedGame ?? '')
-      : pickLive(live.games, teams, match === BETWEEN);
+      : pickLive(live.games, teams, match === BETWEEN, r.live?.id);
     if (g) actions.showLive(g);
     return Boolean(g);
   }, [liveWanted, live.games, teams, match, linkedGame, actions]);

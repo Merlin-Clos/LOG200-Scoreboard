@@ -6,10 +6,9 @@ import { VersionBadge } from './version-badge';
 type Props = PropsWithChildren & {
   current: TPageKey;
   showVersion?: boolean;
-  teams?: string[];
 };
 
-const Masthead: FC<Props> = ({ current, showVersion = true, teams, children }) => {
+const Masthead: FC<Props> = ({ current, showVersion = true, children }) => {
   return (
     <header className="masthead">
       <h1 className="title">
@@ -20,7 +19,7 @@ const Masthead: FC<Props> = ({ current, showVersion = true, teams, children }) =
         {pages.map(({ key, label, href }) => (
           <a
             key={key}
-            href={pageUrl(href, teams ? { teams: teams.join(',') } : {})}
+            href={pageUrl(href)}
             aria-current={key === current ? 'page' : undefined}
           >
             {label}

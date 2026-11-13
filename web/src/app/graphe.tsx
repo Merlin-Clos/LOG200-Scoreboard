@@ -85,7 +85,7 @@ const GraphePage = () => {
 
   return (
     <>
-      <Masthead current="graphe" teams={selected}>
+      <Masthead current="graphe">
         <VerifiedFilter
           hidden={!summary?.verified}
           checked={verifiedParam === '1'}

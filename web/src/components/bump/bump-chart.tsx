@@ -91,7 +91,7 @@ const BumpChart: FC<Props> = ({ columns, series, selected, metric, palette, vers
   };
 
   // Le lien garde les équipes choisies et les filtres du graphe.
-  const gameUrl = (id: string) => pageUrl('./', { teams: selected.join(','), game: id });
+  const gameUrl = (id: string) => pageUrl('./', { game: id });
 
   const handleKeyDown = (e: KeyboardEvent) => {
     if (!geom) return;
