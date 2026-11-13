@@ -5,14 +5,25 @@ import { cn } from '@/lib/utils';
 import type { TColor, TGameRow, TRatingChange, TSide } from '@/types/games.types';
 import type { FC } from 'react';
 
+export type TSideOrder = 'color' | 'left' | 'right';
+
 type Props = {
   game: TGameRow;
   rating: (side: TSide) => TRatingChange;
   current: boolean;
+  selectedTeam?: string;
+  sideOrder?: TSideOrder;
   onSelect: (game: TGameRow) => void;
 };
 
-const GameItem: FC<Props> = ({ game: g, rating, current, onSelect }) => {
+const GameItem: FC<Props> = ({ game: g, rating, current, selectedTeam, sideOrder = 'color', onSelect }) => {
+  const selectedColor = g.red.team === selectedTeam ? 'red' : g.black.team === selectedTeam ? 'black' : undefined;
+  let left: TColor = 'red';
+  if (selectedColor && sideOrder !== 'color') {
+    const opponent = selectedColor === 'red' ? 'black' : 'red';
+    left = sideOrder === 'left' ? selectedColor : opponent;
+  }
+  const right: TColor = left === 'red' ? 'black' : 'red';
   const change = (color: TColor) => roundDelta(rating(g[color])[1]);
   const who = (color: TColor, name: string) =>
     `${g[color].team} (${name}${g[color].remote ? ', distant' : ''}${change(color) ? `, ${signed(change(color))}` : ''})`;
@@ -38,15 +49,15 @@ const GameItem: FC<Props> = ({ game: g, rating, current, onSelect }) => {
         type="button"
         className="game"
         data-id={g.id}
-        aria-label={`${who('red', 'rouge')} contre ${who('black', 'noir')}, ${g[g.winner].team} gagne`}
+        aria-label={`${who(left, left === 'red' ? 'rouge' : 'noir')} contre ${who(right, right === 'red' ? 'rouge' : 'noir')}, ${g[g.winner].team} gagne`}
         aria-current={current ? 'true' : undefined}
         onClick={() => onSelect(g)}
       >
         <time dateTime={g.ts} title={fullFormat.format(new Date(g.ts))}>
           {shortWhen(g.ts)}
         </time>
-        {side('red')}
-        {side('black')}
+        {side(left)}
+        {side(right)}
         <span className="meta">{`${REASONS[g.reason] ?? g.reason}, ${g.moves} coups, ${Math.round(g.duration_ms / 1000)} s`}</span>
       </button>
     </li>

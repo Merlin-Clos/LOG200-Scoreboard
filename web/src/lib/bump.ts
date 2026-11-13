@@ -1,7 +1,7 @@
 // Rangs de la page graphe, rejoués partie par partie depuis timeline.jsonl (format dans docs/formats.md).
 // Un côté sans build est un bot de référence : il ne compte dans le classement que s'il est choisi.
 
-import type { TGameRow, TRatingKey } from '../types/games.types';
+import type { TRatingKey, TRatingRow } from '../types/games.types';
 import { isRemote, ratingOf } from './elo.ts';
 
 export const TOP = 10;
@@ -28,7 +28,7 @@ export function topTeams(ratings: { team: string; build?: string }[], n = TOP) {
 // chaque changement de rang, de rating ou de build. Rang : 1 + équipes et bots choisis devant (rating
 // plus haut, puis nom). `verified` : sans les parties distantes.
 export function rankSeries(
-  rows: TGameRow[],
+  rows: TRatingRow[],
   {
     key = 'all',
     session = '',
@@ -42,7 +42,7 @@ export function rankSeries(
   const counted = (team: string) => !bots.has(team) || series.has(team);
   const builds = new Map<string, string>();
   const series = new Map<string, TRankPoint[]>(selected.map((team) => [team, []]));
-  const columns: TGameRow[] = [];
+  const columns: TRatingRow[] = [];
   for (const g of rows) {
     if ((session && g.session !== session) || (verified && isRemote(g))) continue;
     const changed = new Map<string, string>();

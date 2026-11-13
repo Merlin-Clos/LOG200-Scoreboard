@@ -11,15 +11,21 @@ export function setParam(key: string, value: string | null | undefined, keepEmpt
   history.replaceState(null, '', url);
 }
 
-// Adresse d'une autre page, avec les choix communs aux pages et les paramètres non vides de `extra`.
+// Adresse d'une autre page, avec les choix communs aux pages et les paramètres de `extra`.
+// Une valeur vide reste dans l'adresse (aucune équipe, toutes les sessions).
 export function pageUrl(href: string, extra: Record<string, string | null | undefined> = {}) {
   const url = new URL(href, location.href);
   const here = searchParams();
-  for (const key of ['data', 'session', 'window', 'teams', 'match', 'verified']) {
+  for (const key of [
+    'data', 'session', 'window', 'teams', 'match', 'verified', 'metric', 'elo', 'record', 'pace', 'sort', 'order', 'side',
+  ]) {
     const value = here.get(key);
     if (value !== null) url.searchParams.set(key, value);
   }
-  for (const [key, value] of Object.entries(extra)) if (value) url.searchParams.set(key, value);
+  for (const [key, value] of Object.entries(extra)) {
+    if (value === null) url.searchParams.delete(key);
+    else if (value !== undefined) url.searchParams.set(key, value);
+  }
   url.search = url.searchParams.toString().replaceAll('%2C', ',');
   return url.href;
 }

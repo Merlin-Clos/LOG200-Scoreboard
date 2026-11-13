@@ -2,7 +2,7 @@ import { useScrollEdges } from '@/hooks/use-scroll-edges';
 import { cn } from '@/lib/utils';
 import type { TGameRow, TRatingChange, TSide } from '@/types/games.types';
 import { useRef, type FC } from 'react';
-import { GameItem } from './game-item';
+import { GameItem, type TSideOrder } from './game-item';
 
 const RECENT_GAMES = 50;
 
@@ -10,11 +10,13 @@ type Props = {
   games: TGameRow[];
   rating: (side: TSide) => TRatingChange;
   currentId: string | null;
+  selectedTeam?: string;
+  sideOrder?: TSideOrder;
   onSelect: (game: TGameRow) => void;
 };
 
 // Les plus récentes d'abord.
-const GamesList: FC<Props> = ({ games, rating, currentId, onSelect }) => {
+const GamesList: FC<Props> = ({ games, rating, currentId, selectedTeam, sideOrder, onSelect }) => {
   const ref = useRef<HTMLOListElement>(null);
   const scroll = useScrollEdges(ref);
   const items = games.slice(-RECENT_GAMES).reverse();
@@ -28,7 +30,9 @@ const GamesList: FC<Props> = ({ games, rating, currentId, onSelect }) => {
       onScroll={scroll.onScroll}
     >
       {items.length ? (
-        items.map((g) => <GameItem key={g.id} game={g} rating={rating} current={g.id === currentId} onSelect={onSelect} />)
+        items.map((g) => (
+          <GameItem key={g.id} game={g} rating={rating} current={g.id === currentId} selectedTeam={selectedTeam} sideOrder={sideOrder} onSelect={onSelect} />
+        ))
       ) : (
         <li className="empty">Les parties jouées apparaîtront ici.</li>
       )}

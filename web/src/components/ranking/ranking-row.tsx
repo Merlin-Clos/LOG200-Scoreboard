@@ -7,7 +7,7 @@ import type { TColor } from '@/types/games.types';
 import type { TPaceStat, TTeamRating } from '@/types/summary.types';
 import { forwardRef } from 'react';
 import { DuelBadge } from './duel-badge';
-import { PACE_WARN, type TEloStat, type TRecordStat } from './ranking.data';
+import { PACE_WARN, recordOf, winRate, type TEloStat, type TRecordStat } from './ranking.data';
 
 export type TDuel = { id?: string; opponent: string; color: TColor; chance: number | null };
 
@@ -28,18 +28,23 @@ type Props = {
 const RankingRow = forwardRef<HTMLTableRowElement, Props>(
   ({ rank, rating: r, version: v, duel, opponentListed, eloStat, recordStat, paceStat, highlight }, ref) => {
     const bot = !r.build;
-    const all = `${r.wins}–${r.losses}`;
-    const build = `${r.build_wins}–${r.build_games - r.build_wins}`;
+    const all = recordOf(r, 'all');
+    const build = recordOf(r, 'build');
+    const shown = recordStat === 'build' ? build : all;
+    const allText = `${all.wins}–${all.losses}`;
+    const buildText = `${build.wins}–${build.losses}`;
+    const pct = winRate(r);
+    const elo = r[eloStat];
 
     return (
       <tr
         ref={ref}
-        className={cn(bot && 'bot', r.archived && 'archived-row', highlight)}
+        className={cn(bot && 'bot', rank === 1 && 'leader', r.archived && 'archived-row', highlight)}
         data-team={r.team}
         title={r.archived ? 'Dernier Elo de cette version, hors classement actuel' : undefined}
       >
-        <td className="num rank">{rank ?? '—'}</td>
-        <td className="team" title={r.team}>
+        <td className="num rank" title={rank ? 'Rang officiel selon l’Elo actuel' : 'Version archivée, hors classement'}>{rank ?? '–'}</td>
+        <th scope="row" className="team" title={r.team}>
           <div className="team-line">
             <span className="team-name">{r.team}</span>
             {r.archived && (
@@ -57,16 +62,19 @@ const RankingRow = forwardRef<HTMLTableRowElement, Props>(
             )}
             {duel?.id && <LiveLink id={duel.id} title="Suivre la partie en direct" />}
           </div>
-        </td>
-        <td className="num elo">{Math.round(r[eloStat] ?? r.rating)}</td>
+        </th>
+        <td className="num elo">{elo === undefined ? '' : Math.round(elo)}</td>
         <td
           className="num record"
-          title={r.archived ? `${v}, version archivée uniquement : ${build}` : `Toutes versions ${all}, ${v || 'version actuelle'} ${build}`}
+          title={r.archived ? `${v}, version archivée uniquement : ${buildText}` : `Toutes versions ${allText}, ${v || 'version actuelle'} ${buildText}`}
         >
-          {recordStat === 'build' ? build : all}
+          {shown.wins}–{shown.losses}
+        </td>
+        <td className="num games-count" title={recordStat === 'build' ? 'Parties de la version actuelle' : 'Parties toutes versions'}>
+          {shown.games}
         </td>
         <td className="num pct" title={`${r.build_wins} victoires sur ${r.build_games} parties${v ? ` de ${v}` : ''}`}>
-          {Math.round((100 * r.build_wins) / r.build_games)} %
+          {pct === undefined ? '' : `${Math.round(100 * pct)} %`}
         </td>
         <PaceCell rating={r} stat={paceStat} />
         <td className="num last-col" title={r.last ? fullFormat.format(new Date(r.last)) : ''}>

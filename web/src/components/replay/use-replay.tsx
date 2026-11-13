@@ -123,6 +123,7 @@ const useReplay = () => {
       },
 
       unpin() {
+        seq.current++;
         commit({ pinned: false });
       },
 

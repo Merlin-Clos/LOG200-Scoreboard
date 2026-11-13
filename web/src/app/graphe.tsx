@@ -1,6 +1,6 @@
-// Page graphe : rang des équipes choisies après chaque partie (bump chart), rejoué depuis
+// Page graphe : rang ou Elo des équipes choisies après chaque partie, rejoué depuis
 // timeline.jsonl ; un nœud marque chaque nouvelle version de jar.
-// ?session=, ?teams=, ?window= et ?verified= suivent les choix de la page : l'adresse se partage
+// ?session=, ?teams=, ?window=, ?verified= et ?metric= suivent les choix de la page : l'adresse se partage
 // telle quelle.
 
 import { BumpChart } from '@/components/bump/bump-chart';
@@ -21,6 +21,11 @@ import { timeFormat, versionOf } from '@/lib/format';
 import { withProviders } from '@/providers/with-providers';
 import { useCallback, useMemo } from 'react';
 
+const CHART_MODES = [
+  { value: 'rank', label: 'Rang' },
+  { value: 'rating', label: 'Elo' },
+];
+
 const GraphePage = () => {
   const { data: summary, error, dataUpdatedAt } = useGetSummary();
   const { data: timeline, error: timelineError, dataUpdatedAt: timelineUpdatedAt } = useGetTimeline();
@@ -28,9 +33,11 @@ const GraphePage = () => {
   const [sessionChoice, setSessionChoice] = useSearchParam('session', true);
   const [verifiedParam, setVerifiedParam] = useSearchParam('verified');
   const [windowParam, setWindowParam] = useSearchParam('window');
+  const [metricParam, setMetricParam] = useSearchParam('metric');
   // Absent : le top 10, qui suit le classement ; vide : aucune équipe.
   const [teamsParam, setTeamsParam] = useSearchParam('teams', true);
   const window = windowOf(windowParam);
+  const metric = metricParam === 'elo' ? 'rating' : 'rank';
 
   // Sans ?session=, la session la plus récente.
   const sessions = summary?.sessions ?? [];
@@ -80,7 +87,7 @@ const GraphePage = () => {
 
   return (
     <>
-      <Masthead current="graphe">
+      <Masthead current="graphe" teams={selected}>
         <VerifiedFilter
           hidden={!summary?.verified}
           checked={verifiedParam === '1'}
@@ -93,7 +100,15 @@ const GraphePage = () => {
       <main className="layout graph-layout">
         <section className="panel bump" aria-labelledby="bump-title">
           <div className="bump-head">
-            <h2 id="bump-title">Rangs au fil des parties</h2>
+            <h2 id="bump-title">{metric === 'rank' ? 'Rangs' : 'Elo'} au fil des parties</h2>
+            <WindowRadio
+              id="chart-mode"
+              name="metric"
+              label="Mesure du graphe"
+              value={metric}
+              options={CHART_MODES}
+              onChange={(value) => setMetricParam(value === 'rating' ? 'elo' : null)}
+            />
             <WindowRadio
               id="bump-window"
               name="window"
@@ -117,7 +132,7 @@ const GraphePage = () => {
               Top 10
             </button>
           </div>
-          <BumpChart columns={columns} series={series} selected={selected} palette={palette} versionOf={version} />
+          <BumpChart columns={columns} series={series} selected={selected} metric={metric} palette={palette} versionOf={version} />
         </section>
       </main>
     </>

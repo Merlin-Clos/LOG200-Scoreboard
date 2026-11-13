@@ -4,11 +4,11 @@ Live leaderboard (Elo, game history, replays) for the Isolation lab of LOG200.
 
 ![Leaderboard page: Elo ranking, recent games and the replay of one game](docs/images/leaderboard.png)
 
-Pick one or more teams above the recent games (type to filter, × to remove) to see only their games. With several teams, choose between the games of any of them ("Avec l'une") or only the games they played against each other ("Entre elles"). With a single team, its Elo over time is shown, over the last hour, day, week or all games, with a dashed mark where each new jar version (v2, v3…) starts; with several, a link opens their ranks on the Graphe page. The address follows the choices (`?teams=eq03,eq08`, `?match=entre`, `?window=24h`, `?game=<id>`), so a filtered view or a single game can be shared as a link ("Copier le lien" above the replay), and the chosen teams follow you to the Graphe page and back.
+Pick one or more teams above the recent games (type to filter, × to remove) to see only their games. With several teams, choose between games involving any of them ("Avec l'une") or only their head-to-head games ("Entre elles"). With one team, choose whether to keep it on the left or right, regardless of its color. A link opens the selected teams' charts. The address keeps the filters and selected game, so the view can be shared ("Copier le lien" above the replay).
 
-![Leaderboard filtered on one team: Elo curve over the last 7 days with a mark at each new version (v2 to v6) above its recent games, and the first game of v4 in the replay](docs/images/leaderboard-team.png)
+Ranking headers sort rows in either direction; separate controls choose current/peak Elo, the all-version/current-build record and the move-time statistic. The rank column keeps the official current-Elo position. On phones, scroll the table horizontally to reach every column. "Soumettre un JAR" opens the submission form when needed.
 
-The Graphe page (link in the header) follows the rank of several teams game after game, like a CTFd scoreboard: one line per team, and a node at each new jar version, as on a git graph. It shows the top 10 by default; teams are added from the field above the chart (type to filter) and removed with their ×. Over long windows the rank is averaged so the lines stay readable. Hover the chart or use the arrow keys to read the exact rank, Elo and version of every followed team at any game, then click or press Enter to open that game in the replay. The address keeps the choices (`?teams=eq03,eq07`, `?window=7j`).
+The charts page offers rank and Elo views for the same selected teams, session and time window. It shows the top 10 by default; add teams from the field above the chart and remove them with their ×. A node marks each new jar version. Hover, drag a finger or use the arrow keys to read a point; the replay link or Enter opens its game. Team and filter choices follow navigation between the ranking and charts.
 
 ![Graphe page: rank of the top 10 teams over the last 7 days, the line of eq07 highlighted with a node at each of its versions, and a tooltip listing the rank, version and Elo of each team after one game](docs/images/graph.png)
 
@@ -75,7 +75,7 @@ The relay starts the jar for every game and keeps reconnecting until stopped. Th
 | `isolation-check` | Replays and validates a JSONL file or an official save (`BOARDGAME 1`) |
 | `isolation-remote` | Relay for a team that plays from its own machine: starts the jar for each game and forwards its lines to the ladder (`/api/remote`, see `docs/formats.md`) |
 | `sandbox/` | gVisor sandboxes for the referee and each player (see `docs/formats.md`) |
-| `web/` | Static pages (Astro + React, built to `web/dist`): Elo ranking, recent games, replay; rank graph of the chosen teams (`graphe.html`); weekly tournament bracket (`tournoi.html`); games in progress, move by move (`direct.html`) |
+| `web/` | Static pages (Astro + React, built to `web/dist`): Elo ranking, recent games, replay; rank and Elo charts of the chosen teams (`graphe.html`); weekly tournament bracket (`tournoi.html`); games in progress, move by move (`direct.html`) |
 | `templates/ladder.yml` | GitHub Actions workflow for the team repositories: builds the jar and submits it on every push to `main` |
 
 The referee contract and the JSONL format are described in `docs/formats.md`. Any referee that follows it, such as the official C++ CLI, can replace ours.
@@ -100,6 +100,8 @@ Optional for local-only builds: `export RUSTFLAGS="-C target-cpu=native"` before
 Tests: `cargo test --workspace` and `npm test --prefix web`.
 
 `npm run dev:golden --prefix web` shows the page on the ladder's golden test data, with a fake live stream, a small tournament and a queue (`web/dev/golden-server.mjs`): no ladder or Docker needed.
+
+For phone access on a trusted local network, run `npm run dev:golden --prefix web -- --host 0.0.0.0` on the host, then open `http://<computer-LAN-IP>:3000` on the same network. From a dev container, port 3000 must also be published or forwarded on the host's LAN interface. This is a fixture demo, not the public ladder: do not enter real team tokens or expose it to the Internet.
 
 The page proxies `/api` and `/data` to `SCOREBOARD_DEV_SERVER` in dev (`npm run dev`, default `http://localhost:8080`, the compose stack). `npm run build` writes the static site to `web/dist`; the Pages workflow and `deploy/web.Dockerfile` build it the same way.
 

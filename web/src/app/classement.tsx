@@ -1,7 +1,8 @@
 // Page du ladder : classement et dernières parties de summary.json, parties des équipes choisies
 // dans teams/, replay lu partie par partie sur /api/games/<id>.
-// ?session=, ?teams=, ?match=, ?window=, ?verified=, ?pace=, ?record=, ?archives= et ?game= suivent les choix de la page : l'adresse
-// se partage telle quelle. ?team= des anciens liens vaut ?teams= avec cette seule équipe.
+// ?session=, ?teams=, ?match=, ?window=, ?verified=, ?pace=, ?record=, ?elo=, ?sort=, ?order=, ?side=,
+// ?archives= et ?game= suivent les choix de la page : l'adresse se partage telle quelle.
+// ?team= des anciens liens vaut ?teams= avec cette seule équipe.
 
 import { LiveStatus } from '@/components/controls/live-status';
 import { SessionSelect, sessionOptions } from '@/components/controls/session-select';
@@ -9,13 +10,12 @@ import { VerifiedFilter } from '@/components/controls/verified-filter';
 import { WindowRadio } from '@/components/controls/window-radio';
 import { DuelRecord } from '@/components/games/duel-record';
 import { GamesList } from '@/components/games/games-list';
-import { EloChart } from '@/components/elo-chart/elo-chart';
 import { Masthead } from '@/components/masthead/masthead';
 import { TeamPicker } from '@/components/picker/team-picker';
 import { QueueDialog } from '@/components/queue/queue-dialog';
 import { ArchiveFilter } from '@/components/ranking/archive-filter';
 import { RankingPanel } from '@/components/ranking/ranking-panel';
-import { DEFAULT_STATS, ELO_STATS, nextStat, PACE_STATS, RECORD_STATS, statOf } from '@/components/ranking/ranking.data';
+import { DEFAULT_STATS, ELO_STATS, PACE_STATS, RECORD_STATS, sortOf, statOf } from '@/components/ranking/ranking.data';
 import { ReplayPanel } from '@/components/replay/replay-panel';
 import { useReplay } from '@/components/replay/use-replay';
 import { SubmitPanel } from '@/components/submit/submit-panel';
@@ -26,7 +26,7 @@ import { useLiveGames } from '@/hooks/use-live-games';
 import { usePulse } from '@/hooks/use-pulse';
 import { useSearchParam } from '@/hooks/use-search-param';
 import { archivedRows, archiveOptions, withArchivedRows } from '@/lib/archives';
-import { GLOBAL, windowOf } from '@/lib/constants';
+import { GLOBAL } from '@/lib/constants';
 import { BETWEEN, gamesOf, isRemote, ratingOf } from '@/lib/elo';
 import { timeFormat, versionOf } from '@/lib/format';
 import { pickLive } from '@/lib/live';
@@ -56,10 +56,12 @@ const ClassementPage = () => {
   const [sessionChoice, setSessionChoice] = useSearchParam('session', true);
   const [verifiedParam, setVerifiedParam] = useSearchParam('verified');
   const [matchParam, setMatchParam] = useSearchParam('match');
-  const [windowParam, setWindowParam] = useSearchParam('window');
   const [paceParam, setPaceParam] = useSearchParam('pace');
   const [recordParam, setRecordParam] = useSearchParam('record');
   const [eloParam, setEloParam] = useSearchParam('elo');
+  const [sortParam, setSortParam] = useSearchParam('sort');
+  const [orderParam, setOrderParam] = useSearchParam('order');
+  const [sideParam, setSideParam] = useSearchParam('side');
   // Aucune équipe choisie : les dernières parties de toutes les équipes.
   const [chosen, setChosen] = useState(() => (initial.get('teams') ?? initial.get('team') ?? '').split(',').filter(Boolean));
   const [queueOpen, setQueueOpen] = useState(false);
@@ -70,7 +72,8 @@ const ClassementPage = () => {
   const recordStat = statOf(RECORD_STATS, recordParam, DEFAULT_STATS.record);
   const eloStat = statOf(ELO_STATS, eloParam, DEFAULT_STATS.elo);
   const match = matchParam ?? GLOBAL;
-  const window = windowOf(windowParam);
+  const sort = sortOf(sortParam, orderParam);
+  const sideOrder = sideParam === 'left' || sideParam === 'right' ? sideParam : 'color';
 
   // Sans ?session=, la session la plus récente.
   const sessions = summary?.sessions ?? [];
@@ -164,11 +167,10 @@ const ClassementPage = () => {
   const followLive = useCallback(() => {
     if (!liveWanted) return false;
     const r = actions.current();
-    const shown = r.live && r.id ? live.games.get(r.id) : undefined;
     const g = r.pinned
       ? live.games.get(r.id ?? linkedGame ?? '')
       : teams.length
-        ? (pickLive(live.games, teams, match === BETWEEN) ?? shown)
+        ? pickLive(live.games, teams, teams.length > 1 && match === BETWEEN)
         : undefined;
     if (g) actions.showLive(g);
     return Boolean(g);
@@ -203,7 +205,6 @@ const ClassementPage = () => {
     : scope
       ? `${teams.length ? list.length : scope.games} parties${time ? `, ${time} ms par coup` : ''}, à jour à ${timeFormat.format(new Date(dataUpdatedAt))}`
       : 'Chargement des parties…';
-  const chartTeam = teams.length === 1 ? ratings.find((r) => r.team === teams[0]) : undefined;
 
   return (
     <>
@@ -238,11 +239,13 @@ const ClassementPage = () => {
           eloStat={eloStat}
           recordStat={recordStat}
           paceStat={paceStat}
-          onNextElo={() => setEloParam(eloStat === 'rating' ? 'peak' : null)}
-          onNextRecord={() => setRecordParam(recordStat === 'all' ? 'build' : null)}
-          onNextPace={() => {
-            const next = nextStat(PACE_STATS, paceStat);
-            setPaceParam(next === DEFAULT_STATS.pace ? null : next);
+          sort={sort}
+          onEloChange={(next) => setEloParam(next === DEFAULT_STATS.elo ? null : next)}
+          onRecordChange={(next) => setRecordParam(next === DEFAULT_STATS.record ? null : next)}
+          onPaceChange={(next) => setPaceParam(next === DEFAULT_STATS.pace ? null : next)}
+          onSortChange={(next) => {
+            setSortParam(next.column === 'elo' ? null : next.column);
+            setOrderParam(next.direction === 'ascending' ? 'asc' : null);
           }}
           onOpenQueue={() => setQueueOpen(true)}
         >
@@ -256,27 +259,13 @@ const ClassementPage = () => {
           )}
         </RankingPanel>
 
-        <SubmitPanel />
-
-        <ReplayPanel replay={replay} actions={actions} versionOf={version} />
+        <div className="replay-column">
+          <SubmitPanel />
+          <ReplayPanel replay={replay} actions={actions} versionOf={version} />
+        </div>
 
         <section className="panel games" aria-labelledby="games-title">
-          <div className="games-head">
-            <h2 id="games-title">Parties récentes</h2>
-            <WindowRadio
-              id="match"
-              className="match"
-              name="match"
-              label="Parties montrées"
-              value={match}
-              options={MATCH_OPTIONS}
-              hidden={teams.length < 2}
-              onChange={(value) => {
-                setMatchParam(value);
-                reselect();
-              }}
-            />
-          </div>
+          <h2 id="games-title">Parties récentes</h2>
           <TeamPicker
             className="games-picker"
             ratings={ratings}
@@ -285,29 +274,49 @@ const ClassementPage = () => {
             placeholder="Filtrer par équipe"
             chipsLabel="Équipes choisies"
           />
+          {teams.length > 0 && (
+            <div className="games-controls">
+              {teams.length === 1 ? (
+                <label className="side-order" htmlFor="game-side-order">
+                  <span>Position de {teams[0]}</span>
+                  <select id="game-side-order" value={sideOrder} onChange={(e) => setSideParam(e.target.value === 'color' ? null : e.target.value)}>
+                    <option value="color">Ordre des couleurs</option>
+                    <option value="left">Toujours à gauche</option>
+                    <option value="right">Toujours à droite</option>
+                  </select>
+                </label>
+              ) : (
+                <WindowRadio
+                  id="match"
+                  className="match"
+                  name="match"
+                  label="Parties montrées"
+                  value={match}
+                  options={MATCH_OPTIONS}
+                  onChange={(value) => {
+                    setMatchParam(value);
+                    reselect();
+                  }}
+                />
+              )}
+            </div>
+          )}
           <a
             id="graph-link"
             className="graph-link"
-            hidden={teams.length < 2}
-            href={pageUrl('graphe.html', { teams: teams.join(',') })}
+            href={pageUrl('graphe.html')}
           >
-            Voir leurs rangs dans le graphe →
+            {teams.length ? 'Voir les rangs et l’Elo des équipes choisies' : 'Voir les graphes du classement'}
           </a>
           <DuelRecord teams={teams} games={duelGames} ratings={ratings} versionOf={version} />
-          {chartTeam && (
-            <EloChart
-              team={chartTeam}
-              rows={list}
-              rating={rating}
-              versionOf={version}
-              window={window}
-              now={dataUpdatedAt}
-              onWindowChange={setWindowParam}
-              replayId={replay.id}
-              onOpen={(g) => actions.showGame(g, true)}
-            />
-          )}
-          <GamesList games={list} rating={rating} currentId={replay.id} onSelect={(g) => actions.showGame(g, true)} />
+          <GamesList
+            games={list}
+            rating={rating}
+            currentId={replay.id}
+            selectedTeam={teams.length === 1 ? teams[0] : undefined}
+            sideOrder={sideOrder}
+            onSelect={(g) => actions.showGame(g, true)}
+          />
         </section>
       </main>
 

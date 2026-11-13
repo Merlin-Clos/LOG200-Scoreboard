@@ -17,7 +17,7 @@ const SubmitPanel: FC = () => {
 
   const handleSubmit = async (e: SubmitEvent) => {
     e.preventDefault();
-    if (!file) return;
+    if (!file || state === 'pending') return;
     setState('pending');
     setMessage("Parties de test en cours : une à deux minutes, plus si d'autres soumissions attendent…");
     try {
@@ -31,8 +31,8 @@ const SubmitPanel: FC = () => {
   };
 
   return (
-    <section id="submit-panel" className="panel submit" aria-labelledby="submit-title" hidden={!available}>
-      <h2 id="submit-title">Soumettre un jar</h2>
+    <details id="submit-panel" className="panel submit" hidden={!available}>
+      <summary id="submit-title">Soumettre un JAR</summary>
       <form id="submit-form" className="submit-form" onSubmit={handleSubmit}>
         <label className="field">
           <span>Token de l'équipe</span>
@@ -60,7 +60,7 @@ const SubmitPanel: FC = () => {
       <p id="submit-status" className="submit-status" role="status" aria-live="polite" data-state={state}>
         {message}
       </p>
-    </section>
+    </details>
   );
 };
 

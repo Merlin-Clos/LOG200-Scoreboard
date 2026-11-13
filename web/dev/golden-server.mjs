@@ -208,14 +208,14 @@ const server = createServer((req, res) => {
   res.end();
 });
 server.on('upgrade', upgrade);
-server.listen(PORT, () => {
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`Données golden sur http://localhost:${PORT} (/data, /api)`);
   start();
   // --ignore-lock : toujours au premier plan (Astro passe en arrière-plan s'il détecte un agent).
-  const astro = spawn('npx', ['astro', 'dev', '--ignore-lock'], {
+  const astro = spawn('npx', ['astro', 'dev', '--ignore-lock', ...process.argv.slice(2)], {
     cwd: join(here, '..'),
     stdio: 'inherit',
-    env: { ...process.env, SCOREBOARD_DEV_SERVER: `http://localhost:${PORT}` },
+    env: { ...process.env, SCOREBOARD_DEV_SERVER: `http://127.0.0.1:${PORT}` },
   });
   astro.on('exit', (code) => process.exit(code ?? 0));
   // Arrêter le serveur arrête aussi astro dev.

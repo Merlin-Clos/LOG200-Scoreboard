@@ -1,7 +1,7 @@
 import { REFRESH_MS } from '@/dao/constants/api.const';
 import { teamUrl, timelineUrl } from '@/dao/scoreboard.repository';
 import { tail, tailState, type TTailState } from '@/lib/tail';
-import type { TGameRow } from '@/types/games.types';
+import type { TGameRow, TTimelineRow } from '@/types/games.types';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useRef } from 'react';
 import { queryKeys } from './query-keys';
@@ -42,7 +42,7 @@ export const useGetTeamRows = (teams: string[], use = 'picked') => {
 
 // timeline.jsonl, lu en entier puis suivi par morceaux. Même tableau tant que rien n'arrive.
 export const useGetTimeline = () => {
-  const state = useRef(tailState<TGameRow>());
+  const state = useRef(tailState<TTimelineRow>());
 
   return useQuery({
     queryKey: [queryKeys.timeline],

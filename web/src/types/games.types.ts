@@ -26,14 +26,20 @@ export type TTournamentRef = {
   game: number;
 };
 
-// Ligne de summary.json (recent), de teams/<équipe>.jsonl et de timeline.jsonl.
-export type TGameRow = {
+export type TRatingRow = {
   v: number;
   id: string;
   ts: string;
   session: string;
   red: TSide;
   black: TSide;
+};
+
+// The compact timeline publishes ratings, not the winner or replay details.
+export type TTimelineRow = TRatingRow & { tournament?: true };
+
+// Ligne de summary.json (recent) et de teams/<équipe>.jsonl.
+export type TGameRow = TRatingRow & {
   winner: TColor;
   reason: TReason | string;
   moves: number;

@@ -6,7 +6,10 @@ import type { TRunningGame } from '@/types/games.types';
 import type { TRankingRow } from '@/lib/archives';
 import type { TModel, TPaceStat } from '@/types/summary.types';
 import { useRef, useState, type FC, type ReactNode, type SyntheticEvent } from 'react';
-import { ELO_STATS, PACE_STATS, RECORD_STATS, type TEloStat, type TRecordStat } from './ranking.data';
+import {
+  ELO_STATS, PACE_STATS, RECORD_STATS, SORT_COLUMNS, rankingView, statOf,
+  type TEloStat, type TRankingSort, type TRecordStat, type TSortColumn,
+} from './ranking.data';
 import { RankingRow, type TDuel } from './ranking-row';
 
 type Props = {
@@ -22,11 +25,31 @@ type Props = {
   eloStat: TEloStat;
   recordStat: TRecordStat;
   paceStat: TPaceStat;
-  onNextElo: () => void;
-  onNextRecord: () => void;
-  onNextPace: () => void;
+  sort: TRankingSort;
+  onEloChange: (stat: TEloStat) => void;
+  onRecordChange: (stat: TRecordStat) => void;
+  onPaceChange: (stat: TPaceStat) => void;
+  onSortChange: (sort: TRankingSort) => void;
   onOpenQueue: () => void;
 };
+
+type SortHeaderProps = {
+  column: TSortColumn;
+  label: string;
+  title?: string;
+  sort: TRankingSort;
+  onSort: (column: TSortColumn) => void;
+  className?: string;
+};
+
+const SortHeader: FC<SortHeaderProps> = ({ column, label, title, sort, onSort, className }) => (
+  <th scope="col" className={className} aria-sort={sort.column === column ? sort.direction : undefined}>
+    <button className="th-sort" type="button" title={title} onClick={() => onSort(column)}>
+      {column === 'rank' && <span className="sr-only">Rang officiel </span>}
+      {label}<span className="sort-direction" aria-hidden="true" />
+    </button>
+  </th>
+);
 
 const PING_MS = 1200;
 
@@ -43,9 +66,11 @@ const RankingPanel: FC<Props> = ({
   eloStat,
   recordStat,
   paceStat,
-  onNextElo,
-  onNextRecord,
-  onNextPace,
+  sort,
+  onEloChange,
+  onRecordChange,
+  onPaceChange,
+  onSortChange,
   onOpenQueue,
   children,
 }) => {
@@ -62,9 +87,8 @@ const RankingPanel: FC<Props> = ({
     if (!duels.has(g.black))
       duels.set(g.black, { id: g.id, opponent: g.red, color: 'black', chance: winProbability(model, g.black, g.red, 'black') });
   }
-  const active = ratings.filter((r) => !r.archived);
-  const listed = new Set(active.map((r) => r.team));
-  const ranks = new Map(active.map((r, i) => [r.team, i + 1]));
+  const { rows: sorted, ranks } = rankingView(ratings, sort, { elo: eloStat, record: recordStat, pace: paceStat });
+  const listed = new Set(ranks.keys());
 
   const showOpponent = (e: SyntheticEvent) => setOpponent(opponentOf(e));
   const clearOpponent = () => setOpponent(null);
@@ -80,67 +104,78 @@ const RankingPanel: FC<Props> = ({
   const [eloLabel, eloTitle] = ELO_STATS[eloStat];
   const [recordLabel, recordTitle] = RECORD_STATS[recordStat];
   const [paceLabel, paceTitle] = PACE_STATS[paceStat];
+  const labels = { ...SORT_COLUMNS, elo: eloLabel, record: recordLabel, pace: paceLabel };
+  const onSort = (column: TSortColumn) => onSortChange({
+    column,
+    direction: sort.column === column && sort.direction === 'ascending' ? 'descending' : 'ascending',
+  });
+  const sortProps = { sort, onSort };
 
   return (
     <section className="panel ranking" aria-labelledby="ranking-title">
-      <h2 id="ranking-title">Classement</h2>
+      <div className="ranking-heading">
+        <h2 id="ranking-title">Classement</h2>
+        <button id="queue-open" className="queue-open" type="button" aria-haspopup="dialog" onClick={onOpenQueue}>
+          File d’attente
+        </button>
+      </div>
       {children}
+      <div className="ranking-tools" role="group" aria-label="Mesures affichées">
+        <label htmlFor="elo-stat">
+          <span>Score</span>
+          <select id="elo-stat" value={eloStat} title={eloTitle} onChange={(e) => onEloChange(statOf(ELO_STATS, e.target.value, eloStat))}>
+            {Object.entries(ELO_STATS).map(([value, [label, title]]) => <option key={value} value={value} title={title}>{label}</option>)}
+          </select>
+        </label>
+        <label htmlFor="record-stat">
+          <span>Bilan</span>
+          <select id="record-stat" value={recordStat} aria-label="Bilan et parties" title={recordTitle} onChange={(e) => onRecordChange(statOf(RECORD_STATS, e.target.value, recordStat))}>
+            <option value="all" title={RECORD_STATS.all[1]}>Total</option>
+            <option value="build" title={RECORD_STATS.build[1]}>Actuel</option>
+          </select>
+        </label>
+        <label htmlFor="pace-stat">
+          <span>Temps</span>
+          <select id="pace-stat" value={paceStat} aria-label="Temps par coup" title={paceTitle} onChange={(e) => onPaceChange(statOf(PACE_STATS, e.target.value, paceStat))}>
+            {Object.entries(PACE_STATS).map(([value, [label, title]]) => <option key={value} value={value} title={title}>{label}</option>)}
+          </select>
+        </label>
+      </div>
+      <p className="sr-only" role="status">
+        {`Tri : ${labels[sort.column]}, ordre ${sort.direction === 'ascending' ? 'croissant' : 'décroissant'}.`}
+      </p>
       <div
         ref={scrollRef}
         className={cn('scroll ranking-scroll', scroll.edges.less && 'less', scroll.edges.more && 'more')}
         tabIndex={0}
+        role="region"
         aria-labelledby="ranking-title"
         onScroll={scroll.onScroll}
       >
         <table id="ranking">
+          <caption className="sr-only">Classement et statistiques des équipes. Le numéro reste le rang officiel.</caption>
           <thead>
             <tr>
-              <th scope="col" className="num">
-                #
-              </th>
-              <th scope="col">Équipe</th>
-              <th scope="col" className="num">
-                <button id="elo-stat" className="th-toggle" type="button" title={`${eloTitle}. Cliquer pour changer.`} onClick={onNextElo}>
-                  {eloLabel}
-                </button>
-              </th>
-              <th scope="col" className="num record">
-                <button
-                  id="record-stat"
-                  className="th-toggle"
-                  type="button"
-                  title={`${recordTitle}. Cliquer pour changer.`}
-                  onClick={onNextRecord}
-                >
-                  {recordLabel}
-                </button>
-              </th>
-              <th scope="col" className="num pct">
-                <abbr title="Pourcentage de victoires, version actuelle">% V</abbr>
-              </th>
-              <th scope="col" className="num pace">
-                <button
-                  id="pace-stat"
-                  className="th-toggle"
-                  type="button"
-                  title={`${paceTitle}, version actuelle. Cliquer pour changer de mesure.`}
-                  onClick={onNextPace}
-                >
-                  {paceLabel}
-                </button>
-              </th>
-              <th scope="col" className="num last-col">
-                <button
-                  id="queue-open"
-                  className="th-toggle"
-                  type="button"
-                  aria-haspopup="dialog"
-                  title="Voir la file d'attente"
-                  onClick={onOpenQueue}
-                >
-                  Dernière
-                </button>
-              </th>
+              <SortHeader {...sortProps} column="rank" label="#" title="Rang officiel selon l’Elo actuel" className="num" />
+              <SortHeader {...sortProps} column="team" label="Équipe" className="team" />
+              <SortHeader {...sortProps} column="elo" label={eloLabel} title={eloTitle} className="num" />
+              <SortHeader
+                {...sortProps}
+                column="record"
+                label={recordLabel}
+                title={`${recordTitle}. Tri par victoires, puis moins de défaites.`}
+                className="num record"
+              />
+              <SortHeader
+                {...sortProps}
+                column="games"
+                label="Parties"
+                title={recordStat === 'build' ? 'Nombre de parties, version actuelle' : 'Nombre de parties, toutes versions'}
+                className="num"
+              />
+              <SortHeader {...sortProps} column="pct" label="% V" title="Pourcentage de victoires, version actuelle" className="num pct" />
+              <SortHeader {...sortProps} column="pace" label={paceLabel} title={`${paceTitle}, version actuelle`} className="num pace" />
+              <SortHeader {...sortProps} column="last" label="Dernière" title="Date de la dernière partie" className="num last-col" />
             </tr>
           </thead>
           <tbody
@@ -150,7 +185,7 @@ const RankingPanel: FC<Props> = ({
             onBlur={clearOpponent}
             onClick={goToOpponent}
           >
-            {ratings.map((r) => {
+            {sorted.map((r) => {
               if (r.archived)
                 return (
                   <RankingRow

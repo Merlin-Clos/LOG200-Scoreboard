@@ -27,7 +27,7 @@ const ReplayPanel: FC<Props> = ({ replay, actions, versionOf }) => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as Element;
       const queue = document.querySelector<HTMLDialogElement>('#queue');
-      if (target.closest('input, select, textarea, [contenteditable], [role="slider"]') || queue?.open) return;
+      if (target.closest('input, select, textarea, [contenteditable], [role="slider"], .ranking-scroll') || queue?.open) return;
       if (e.key === 'ArrowLeft') actions.browse(actions.current().index - 1);
       if (e.key === 'ArrowRight') actions.browse(actions.current().index + 1);
     };
