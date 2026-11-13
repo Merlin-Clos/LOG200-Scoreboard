@@ -2,15 +2,19 @@
 
 Live leaderboard (Elo, game history, replays) for the Isolation lab of LOG200.
 
-![Leaderboard page: Elo ranking, recent games and the replay of one game](docs/images/leaderboard.png)
+![Leaderboard page: sortable ranking and statistic selectors, collapsible JAR submission, recent games and replay](docs/images/leaderboard.png)
 
 Pick one or more teams above the recent games (type to filter, × to remove) to see only their games. With several teams, choose between games involving any of them ("Avec l'une") or only their head-to-head games ("Entre elles"). With one team, choose whether to keep it on the left or right, regardless of its color. A link opens the selected teams' charts. The address keeps the filters and selected game, so the view can be shared ("Copier le lien" above the replay).
 
 Ranking headers sort rows in either direction; separate controls choose current/peak Elo, the all-version/current-build record and the move-time statistic. The rank column keeps the official current-Elo position. On phones, scroll the table horizontally to reach every column. "Soumettre un JAR" opens the submission form when needed.
 
-The charts page offers rank and Elo views for the same selected teams, session and time window. It shows the top 10 by default; add teams from the field above the chart and remove them with their ×. A node marks each new jar version. Hover, drag a finger or use the arrow keys to read a point; the replay link or Enter opens its game. Team and filter choices follow navigation between the ranking and charts.
+The charts page offers rank and Elo views for the same selected teams, session and time window. It shows the top 10 by default; add teams from the field above the chart and remove them with their ×. A node marks each new jar version. Hover, drag a finger or use the arrow keys to read a point; the replay link or Enter opens its game. Explicit team selections and filters follow navigation between the ranking and charts, the default top 10 does not filter the ranking's recent games.
 
-![Graphe page: rank of the top 10 teams over the last 7 days, the line of eq07 highlighted with a node at each of its versions, and a tooltip listing the rank, version and Elo of each team after one game](docs/images/graph.png)
+![Rank chart of four teams over the last hour, with team selection, metric and time-window controls, and a game tooltip](docs/images/graph.png)
+
+![Elo chart of the same four teams and time window, with a highlighted team and a game tooltip](docs/images/graph-elo.png)
+
+The leaderboard and chart screenshots use the golden demo data.
 
 The Tournoi page rehearses the final tournament every week. Every Wednesday at 7 a.m. and Sunday at 7 p.m. (Montréal time), the ladder draws the teams that have an accepted jar, freezes their jars and plays a double-elimination bracket before its regular games: strongest against weakest in the first round by verified Elo, best of 3 at 5 s per move, and a best-of-5 grand final where the winners' bracket champion starts 1–0. The page draws the bracket live, Challonge style, with the final standings and a link to replay every game; past tournaments stay available from the selector (`?tournament=`). Between tournaments, the page shows a preview of the next bracket: the draw as it would be right now, updated after every game. Tournament games count only in their own session (`tournoi-2026-11-08`), not in the overall Elo.
 
