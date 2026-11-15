@@ -1628,6 +1628,7 @@ input[type='range'] {
     height: 100%;
     overflow: hidden;
     font-size: 0.75rem;
+    pointer-events: none;
 }
 
 .bump-grid line {
@@ -1650,8 +1651,18 @@ input[type='range'] {
     stroke-linejoin: round;
 }
 
-.bump-lines path.bot {
+.bump-lines .bot {
     stroke-dasharray: 4 3;
+}
+
+.bump-lines .focus-stroke {
+    stroke-width: 3;
+    opacity: 0;
+}
+
+/* Compositing hints can retain full raster surfaces. */
+.bump-lines > .cached > path {
+    will-change: opacity;
 }
 
 /* Anneau de la couleur du fond : un nœud se détache des lignes qu'il recouvre. */
@@ -1686,8 +1697,12 @@ input[type='range'] {
     opacity: 0.2;
 }
 
-#bump-svg.focusing path.on {
-    stroke-width: 3;
+#bump-svg.focusing .on > .normal-stroke {
+    opacity: 0;
+}
+
+#bump-svg.focusing .on > .focus-stroke {
+    opacity: 1;
 }
 
 .bump-cursor {

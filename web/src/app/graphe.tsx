@@ -53,17 +53,17 @@ const GraphePage = () => {
     return teamsParam.split(',').filter((t) => t && known.has(t));
   }, [teamsParam, ratings]);
 
+  const cutoff = dataUpdatedAt - (WINDOWS[window] ?? Infinity);
   const { columns, series } = useMemo(() => {
     const rows = session === GLOBAL ? (timeline ?? []).filter((t) => !t.tournament) : (timeline ?? []);
     return rankSeries(rows, {
       key: session === GLOBAL ? 'all' : 'session',
       session,
       selected,
-      // La fenêtre avance avec l'heure de la dernière lecture.
-      cutoff: dataUpdatedAt - (WINDOWS[window] ?? Infinity),
+      cutoff,
       verified,
     });
-  }, [timeline, session, selected, window, verified, dataUpdatedAt]);
+  }, [timeline, session, selected, cutoff, verified]);
 
   // Un bot reste gris et ne prend pas de couleur.
   const palette = useMemo(() => {

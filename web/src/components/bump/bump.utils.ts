@@ -1,5 +1,5 @@
-import { smooth, type TRankPoint } from '@/lib/bump';
-import { dayFormat, timeFormat } from '@/lib/format';
+import { smooth, type TRankPoint } from '../../lib/bump.ts';
+import { dayFormat, timeFormat } from '../../lib/format.ts';
 import type { TRatingRow } from '@/types/games.types';
 
 const MARGIN = { top: 18, right: 96, bottom: 28, left: 36 };
@@ -81,9 +81,15 @@ export function chartGeometry(
 
 // Rang ou Elo interpolé de la ligne à `col` : un nœud se pose sur la ligne, même lissée.
 export function valueAt(path: TVertex[], col: number) {
-  const k = path.findIndex(([c]) => c >= col);
-  if (k <= 0) return path[Math.max(k, 0)][1];
-  const [[c0, r0], [c1, r1]] = [path[k - 1], path[k]];
+  let lo = 0;
+  let hi = path.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (path[mid][0] >= col) hi = mid;
+    else lo = mid + 1;
+  }
+  if (lo === 0 || lo === path.length) return path[0][1];
+  const [[c0, r0], [c1, r1]] = [path[lo - 1], path[lo]];
   return c1 === c0 ? r1 : r0 + ((r1 - r0) * (col - c0)) / (c1 - c0);
 }
 

@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import type { TRatingRow } from '@/types/games.types';
 import {
   Fragment,
+  useCallback,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -24,12 +25,15 @@ type Props = {
 };
 
 type THover = { col: number | null; team: string | null };
+type TPointerPosition = { clientX: number; clientY: number };
 
 const muted = 'var(--muted)';
 
 const BumpChart: FC<Props> = ({ columns, series, selected, metric, palette, versionOf }) => {
   const plot = useRef<HTMLDivElement>(null);
   const tip = useRef<HTMLDivElement>(null);
+  const pointerFrame = useRef<number | null>(null);
+  const pendingPoint = useRef<TPointerPosition | null>(null);
   const [size, setSize] = useState({ width: 240, height: 200 });
   const [hover, setHover] = useState<THover>({ col: null, team: null });
 
@@ -45,8 +49,35 @@ const BumpChart: FC<Props> = ({ columns, series, selected, metric, palette, vers
 
   const geom = useMemo(
     () => chartGeometry(columns.length, series, selected, metric, size),
-    [columns, series, selected, metric, size]
+    [columns.length, series, selected, metric, size]
   );
+  const lines = useMemo(() => {
+    if (!geom) return [];
+    const cached = new Set(
+      [...geom.paths]
+        .filter(([, path]) => path.length > geom.inner.w)
+        .sort(([, a], [, b]) => b.length - a.length)
+        .slice(0, 10)
+        .map(([t]) => t)
+    );
+    return geom.paintOrder.map((t) => {
+      const path = geom.paths.get(t)!;
+      return {
+        team: t,
+        d: path.map(([c, value], i) => `${i ? 'L' : 'M'}${geom.x(c)},${geom.y(value)}`).join(''),
+        cached: cached.has(t),
+      };
+    });
+  }, [geom]);
+
+  const cancelPointer = useCallback(() => {
+    if (pointerFrame.current !== null) cancelAnimationFrame(pointerFrame.current);
+    pointerFrame.current = null;
+    pendingPoint.current = null;
+  }, []);
+
+  // Queued coordinates belong to the current geometry and column domain.
+  useLayoutEffect(() => cancelPointer, [cancelPointer, geom, columns]);
 
   // Rang ou Elo exact, pas lissé, meilleure d'abord.
   const standingsAt = (col: number) =>
@@ -66,15 +97,17 @@ const BumpChart: FC<Props> = ({ columns, series, selected, metric, palette, vers
 
   const showAt = (col: number, team = hover.team) => {
     if (!geom) return hide();
+    cancelPointer();
     const next = inspectAt(col, team);
-    setHover({ col: next.col, team: next.team });
+    setHover((h) => h.col === next.col && h.team === next.team ? h : { col: next.col, team: next.team });
   };
 
   const hide = () => {
-    setHover((h) => ({ ...h, col: null }));
+    cancelPointer();
+    setHover((h) => h.col === null ? h : { ...h, col: null });
   };
 
-  const pointed = (e: { clientX: number; clientY: number }) => {
+  const pointed = (e: TPointerPosition) => {
     const box = plot.current!.getBoundingClientRect();
     const px = e.clientX - box.left;
     const py = e.clientY - box.top;
@@ -110,8 +143,10 @@ const BumpChart: FC<Props> = ({ columns, series, selected, metric, palette, vers
       const rows = standingsAt(current);
       const i = rows.findIndex((r) => r.team === hover.team) + (e.key === 'ArrowUp' ? -1 : 1);
       showAt(current, rows[Math.max(0, Math.min(rows.length - 1, i))]?.team ?? null);
-    } else if (e.key === 'Enter' || e.key === ' ') location.assign(gameUrl(columns[current].id));
-    else if (e.key === 'Escape') hide();
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      cancelPointer();
+      location.assign(gameUrl(columns[current].id));
+    } else if (e.key === 'Escape') hide();
     else return;
     e.preventDefault();
   };
@@ -182,11 +217,20 @@ const BumpChart: FC<Props> = ({ columns, series, selected, metric, palette, vers
         aria-label="Parties : flèches gauche et droite pour parcourir, haut et bas pour changer d'équipe, Entrée pour rejouer"
         onPointerMove={(e) => {
           if (!geom || !e.isPrimary) return;
-          const at = pointed(e);
-          showAt(at.col, at.team);
+          pendingPoint.current = { clientX: e.clientX, clientY: e.clientY };
+          if (pointerFrame.current !== null) return;
+          pointerFrame.current = requestAnimationFrame(() => {
+            pointerFrame.current = null;
+            const point = pendingPoint.current;
+            pendingPoint.current = null;
+            if (!point) return;
+            const at = pointed(point);
+            showAt(at.col, at.team);
+          });
         }}
         onPointerDown={(e) => {
           if (!geom || !e.isPrimary || e.button !== 0) return;
+          cancelPointer();
           e.currentTarget.focus({ preventScroll: true });
           e.currentTarget.setPointerCapture(e.pointerId);
           const at = pointed(e);
@@ -217,20 +261,19 @@ const BumpChart: FC<Props> = ({ columns, series, selected, metric, palette, vers
                   </text>
                 ))}
               </g>
+              {/* Changing stroke width rerasterizes dense paths during hover. */}
               <g className="bump-lines">
-                {geom.paintOrder.map((t) => {
-                  const path = geom.paths.get(t)!;
-                  const d = path.map(([c, value], i) => `${i ? 'L' : 'M'}${geom.x(c)},${geom.y(value)}`).join('');
-                  return (
-                    <path
-                      key={t}
-                      d={d}
-                      className={cn(series.get(t)![0].bot && 'bot', on(t) && 'on')}
-                      style={{ stroke: palette.get(t) ?? muted }}
-                      data-team={t}
-                    />
-                  );
-                })}
+                {lines.map(({ team: t, d, cached }) => (
+                  <g
+                    key={t}
+                    className={cn(series.get(t)![0].bot && 'bot', on(t) && 'on', cached && 'cached')}
+                    style={{ stroke: palette.get(t) ?? muted }}
+                    data-team={t}
+                  >
+                    <path d={d} className="normal-stroke" />
+                    <path d={d} className="focus-stroke" />
+                  </g>
+                ))}
               </g>
               <g className="bump-nodes">
                 {geom.paintOrder.map((t) => {
