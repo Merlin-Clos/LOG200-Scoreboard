@@ -207,9 +207,17 @@ impl Ladder {
                 black,
                 outcome,
                 game,
+                after,
             } => {
                 published(self.live.end(&red, &black));
-                let saved = save(cfg, &self.db, &mut self.standings, outcome, &red, &black)?;
+                let saved = save(
+                    cfg,
+                    &self.db,
+                    &mut self.standings,
+                    outcome,
+                    after.as_deref(),
+                    [&red, &black],
+                )?;
                 self.tournaments.publish_preview(cfg, &self.standings);
                 if let Some(game) = game {
                     self.tournaments.record(cfg, &game, saved.as_ref());
@@ -250,8 +258,8 @@ fn save(
     db: &Db,
     standings: &mut Standings,
     outcome: Result<GameRecord, GameError>,
-    red: &str,
-    black: &str,
+    after: Option<&str>,
+    [red, black]: [&str; 2],
 ) -> anyhow::Result<Option<GameRecord>> {
     let record = match outcome {
         Ok(record) => record,
@@ -260,7 +268,8 @@ fn save(
             return Ok(None);
         }
     };
-    db.insert_game(&record).with_context(|| cfg.db.display().to_string())?;
+    db.insert_game(&record, after)
+        .with_context(|| cfg.db.display().to_string())?;
     if let Err(e) = standings.record(&record, db) {
         eprintln!("   classement non publié : {e}");
     }

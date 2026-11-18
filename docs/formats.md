@@ -145,14 +145,16 @@ Le ladder enregistre chaque partie terminée dans une base SQLite, `db` dans `la
 - `remote` (absent par défaut) : l'équipe a joué depuis sa propre machine. Le serveur n'a pas vu son code, et `build` est celui qu'elle déclare.
 - `node` (absent par défaut) : id du nœud de calcul qui a joué la partie (voir « Nœuds ») ; absent, le serveur principal. Une partie de nœud compte comme les autres.
 - `tournament` (absent par défaut) : `{"id": "tournoi-2026-11-08", "match": "W3", "game": 2}`, partie d'un tournoi hebdomadaire (voir [spec-tournoi-hebdo.md](spec-tournoi-hebdo.md)) : id du tournoi, match du tableau et numéro de la manche.
-Le schéma est dans [`crates/isolation-ladder/src/sql/schema.sql`](../crates/isolation-ladder/src/sql/schema.sql) ; sa version est dans `PRAGMA user_version` (1). Les tables :
+Le schéma est dans [`crates/isolation-ladder/src/sql/schema.sql`](../crates/isolation-ladder/src/sql/schema.sql) ; sa version est dans `PRAGMA user_version` (2). Un binaire refuse une base de version supérieure à la sienne ; une base v1 passe en v2 à l'ouverture. Les tables :
 
 | Table | Une ligne par | Contenu |
 | --- | --- | --- |
-| `games` | partie | `seq` (ordre de jeu), `id`, l'objet complet dans `record`, et ses champs en colonnes pour les requêtes : `session`, `ts`, `time_ms`, `red_team`, `red_build`, `red_remote`, `black_*`, `winner`, `reason`, `invalid_red`, `invalid_black`, `duration_ms`, `plies` (coups clients), `opening` (JSON), `tournament_id`, `tournament_match`, `tournament_game`. |
+| `games` | partie | `seq` (ordre de jeu), `id`, l'objet complet dans `record`, et ses champs en colonnes pour les requêtes : `session`, `ts`, `time_ms`, `red_team`, `red_build`, `red_remote`, `black_*`, `winner`, `reason`, `invalid_red`, `invalid_black`, `duration_ms`, `plies` (coups clients), `opening` (JSON), `tournament_id`, `tournament_match`, `tournament_game`. `pair` : le `seq` de la première partie de sa paire du ladder (même ouverture, couleurs inversées), le sien pour une partie seule, `NULL` pour un tournoi. Écrit par le ladder ; l'historique d'une base v1 et les parties importées sont appariés par la règle de [spec-analyse-isola.md](spec-analyse-isola.md#migration-v1--v2). |
 | `moves` | coup client | `game` (le `seq` de la partie), `ply` (0 pour le premier coup client, joué par le rouge), `color`, `move`, `ms` (temps de réflexion, absent chez d'autres arbitres). |
 | `ratings` | équipe et partie | `game_id`, `team`, `all_rating`, `all_delta`, `session_rating`, `session_delta` : comme `all` et `session` des lignes de la page (plus bas). Recalculée au démarrage. |
 | `submissions` | soumission de jar | `ts`, `team`, `hash`, `verdict` (`accepted`, `rejected` ou `error`) et `detail` (raison d'un refus). |
+| `profiles` | jar profilé et partie | Réservée au profileur (voir [spec-analyse-isola.md](spec-analyse-isola.md#profileur)) : `game`, `color`, `team`, `build`, `turns` (tours détectés), `moves`, `overhead_ms`, `tree`, `arena`, `template`. Vide pour l'instant. |
+| `profiling` | équipe et build | Choix de profilage : `private`, `public` (implique `private`). Vide pour l'instant. |
 
 - Au démarrage, une base sans partie importe l'ancien fichier `out` (`data/games.jsonl`, une partie par ligne au format ci-dessus) puis le renomme en `games.jsonl.migrated`. `jars/submissions.jsonl` suit le même chemin vers `submissions`. Les lignes illisibles sont ignorées et signalées.
 - La base est en mode WAL : un lecteur (`sqlite3`, l'API) ne bloque pas le ladder. Pour une copie cohérente, passer par `.backup` (voir [deploy/README.md](../deploy/README.md#au-quotidien)).

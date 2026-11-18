@@ -76,7 +76,7 @@ Une **paire** est formée par les deux parties de `spawn_pair` (`play.rs`) : mê
 ### Canal et stockage
 
 - Le lecteur de stderr du ladder (`exec.rs`) met de côté les lignes qui commencent par `prof ` ou `ARENA `, avec leur propre plafond. Le reste du journal ne change pas : `data/logs/`, 1 Mio, 60 jours, invisible du public.
-- En fin de partie, ces lignes sont analysées et écrites dans la même transaction que la partie : table `profiles (game, color, team, build, turns, moves, doubtful, overhead_ms, tree, arena, template)`.
+- En fin de partie, ces lignes sont analysées et écrites dans la même transaction que la partie : table `profiles (game, color, team, build, turns, moves, overhead_ms, tree, arena, template)` ; la détection est douteuse quand `turns` diffère de `moves`, sans colonne à part.
 - Les nœuds renvoient déjà le stderr des joueurs (`FromNode::Result`) : rien à ajouter, mais un build profilé n'y joue pas.
 
 ## Bots de référence

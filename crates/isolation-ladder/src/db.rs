@@ -1,19 +1,24 @@
 //! Base SQLite du ladder, source de vérité des parties et des soumissions. Les requêtes sont dans
 //! `sql/`, le schéma dans `sql/schema.sql` (décrit dans docs/formats.md).
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::{Connection, OpenFlags, named_params};
+use rusqlite::{Connection, OpenFlags, TransactionBehavior, named_params};
 
 use isolation_core::board::Color;
 use isolation_core::record::{GameRecord, Jsonl};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 mod sql {
     pub const SCHEMA: &str = include_str!("sql/schema.sql");
+    pub const MIGRATE_V2: &str = include_str!("sql/migrate_v2.sql");
+    pub const UNPAIRED: &str = include_str!("sql/unpaired.sql");
+    pub const SET_PAIR: &str = include_str!("sql/set_pair.sql");
+    pub const PAIR_GAME: &str = include_str!("sql/pair_game.sql");
     pub const IS_EMPTY: &str = include_str!("sql/is_empty.sql");
     pub const GAMES: &str = include_str!("sql/games.sql");
     pub const GAME: &str = include_str!("sql/game.sql");
@@ -103,19 +108,29 @@ fn to_json<T: serde::Serialize>(value: &T) -> rusqlite::Result<String> {
 
 impl Db {
     /// Refuse une base écrite par un binaire plus récent : la réécrire en version courante la
-    /// corromprait sans bruit. Un retour arrière passe par une restauration `.backup`.
+    /// corromprait sans bruit. Un retour arrière passe par une restauration `.backup`. Une base v1
+    /// passe en v2 d'un bloc ; la transaction immédiate la réserve au premier des processus qui
+    /// l'ouvrent (le ladder, le formulaire de soumission).
     pub fn open(path: &Path) -> anyhow::Result<Self> {
-        let conn = Connection::open(path)?;
-        let found: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        let mut conn = Connection::open(path)?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let found: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
         anyhow::ensure!(
             found <= SCHEMA_VERSION,
             "base v{found}, binaire v{SCHEMA_VERSION} : ce binaire est plus ancien que la base"
         );
-        conn.busy_timeout(Duration::from_secs(5))?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.execute_batch(sql::SCHEMA)?;
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        if found == 1 {
+            tx.execute_batch(sql::MIGRATE_V2)?;
+        }
+        tx.execute_batch(sql::SCHEMA)?;
+        if found == 1 {
+            pair_history(&tx)?;
+        }
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        tx.commit()?;
         Ok(Self { conn })
     }
 
@@ -136,9 +151,12 @@ impl Db {
         self.conn.query_row(sql::IS_EMPTY, [], |r| r.get(0))
     }
 
-    pub fn insert_game(&self, game: &GameRecord) -> rusqlite::Result<()> {
+    /// `after` : l'id de la première partie de sa paire, si elle a été enregistrée.
+    pub fn insert_game(&self, game: &GameRecord, after: Option<&str>) -> rusqlite::Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        insert(&tx, game)?;
+        let seq = insert(&tx, game)?;
+        tx.prepare_cached(sql::PAIR_GAME)?
+            .execute(named_params! { ":seq": seq, ":after": after })?;
         tx.commit()
     }
 
@@ -201,6 +219,7 @@ impl Db {
         for game in &jsonl.games {
             insert(&tx, game)?;
         }
+        pair_history(&tx)?;
         tx.commit()?;
         Ok(jsonl.games.len())
     }
@@ -259,7 +278,8 @@ impl Db {
     }
 }
 
-fn insert(conn: &Connection, game: &GameRecord) -> rusqlite::Result<()> {
+/// Insère la partie et ses coups, sans paire ; rend son `seq`.
+fn insert(conn: &Connection, game: &GameRecord) -> rusqlite::Result<i64> {
     let result = &game.result;
     let tournament = game.tournament.as_ref();
     conn.prepare_cached(sql::INSERT_GAME)?.execute(named_params! {
@@ -298,7 +318,59 @@ fn insert(conn: &Connection, game: &GameRecord) -> rusqlite::Result<()> {
             ":ms": result.move_ms.get(ply),
         })?;
     }
+    Ok(seq)
+}
+
+/// Une partie du ladder sans paire, telle que `pair_history` la lit.
+struct Unpaired {
+    seq: i64,
+    red: String,
+    black: String,
+    opening: String,
+}
+
+/// Apparie les parties du ladder qui n'ont pas de paire : l'historique d'une base v1 et les parties
+/// importées de `games.jsonl`. Le ladder écrit la paire en direct depuis la v2.
+fn pair_history(conn: &Connection) -> rusqlite::Result<()> {
+    let games = conn
+        .prepare(sql::UNPAIRED)?
+        .query_map([], |r| {
+            Ok(Unpaired {
+                seq: r.get(0)?,
+                red: r.get(1)?,
+                black: r.get(2)?,
+                opening: r.get(3)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut set = conn.prepare(sql::SET_PAIR)?;
+    for (seq, pair) in pairing(&games) {
+        set.execute(named_params! { ":seq": seq, ":pair": pair })?;
+    }
     Ok(())
+}
+
+/// `(seq, pair)` de chaque partie, `pair` étant le `seq` de la première de sa paire. Une partie et
+/// la suivante des deux mêmes équipes (le `seq` est entrelacé par les slots) forment une paire si
+/// elles ont la même ouverture et les couleurs inversées ; sinon la partie reste seule.
+fn pairing(games: &[Unpaired]) -> Vec<(i64, i64)> {
+    let mut waiting: HashMap<[&str; 2], &Unpaired> = HashMap::new();
+    let mut pairs = Vec::with_capacity(games.len());
+    for game in games {
+        let mut teams = [game.red.as_str(), game.black.as_str()];
+        teams.sort_unstable();
+        match waiting.remove(&teams) {
+            Some(first) if first.opening == game.opening && first.red == game.black => {
+                pairs.extend([(first.seq, first.seq), (game.seq, first.seq)]);
+            }
+            previous => {
+                pairs.extend(previous.map(|alone| (alone.seq, alone.seq)));
+                waiting.insert(teams, game);
+            }
+        }
+    }
+    pairs.extend(waiting.into_values().map(|alone| (alone.seq, alone.seq)));
+    pairs
 }
 
 fn insert_rating(conn: &Connection, r: &Rating) -> rusqlite::Result<()> {
@@ -373,6 +445,121 @@ pub(crate) mod tests {
         fs::remove_file(&path).unwrap();
     }
 
+    /// Chaque partie et l'id de la première partie de sa paire, dans l'ordre de jeu.
+    fn pairs(db: &Db) -> Vec<(String, Option<String>)> {
+        db.conn()
+            .prepare("SELECT g.id, f.id FROM games g LEFT JOIN games f ON f.seq = g.pair ORDER BY g.seq")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    fn expected(pairs: &[(&str, Option<&str>)]) -> Vec<(String, Option<String>)> {
+        pairs.iter().map(|(g, f)| ((*g).into(), f.map(Into::into))).collect()
+    }
+
+    fn tournament_game(id: &str, red: &str, black: &str) -> GameRecord {
+        let mut g = game(id, red, black, Color::Red);
+        g.tournament = Some(TournamentGame {
+            id: "t".into(),
+            match_id: "W1".into(),
+            game: 1,
+        });
+        g
+    }
+
+    #[test]
+    fn a_ladder_game_joins_the_first_game_of_its_pair() {
+        let db = memory();
+        db.insert_game(&game("g1", "a", "b", Color::Red), None).unwrap();
+        db.insert_game(&game("g2", "b", "a", Color::Red), Some("g1")).unwrap();
+        db.insert_game(&game("g3", "a", "b", Color::Red), None).unwrap();
+        db.insert_game(&tournament_game("t1", "a", "b"), None).unwrap();
+        db.insert_game(&tournament_game("t2", "b", "a"), Some("t1")).unwrap();
+        assert_eq!(
+            pairs(&db),
+            expected(&[
+                ("g1", Some("g1")),
+                ("g2", Some("g1")),
+                ("g3", Some("g3")),
+                ("t1", None),
+                ("t2", None),
+            ])
+        );
+    }
+
+    /// Ramène la base au schéma v1 : v2 n'y ajoute que la colonne `pair` et deux tables.
+    fn downgrade_to_v1(path: &Path) {
+        Connection::open(path)
+            .unwrap()
+            .execute_batch(
+                "DROP INDEX games_pair; ALTER TABLE games DROP COLUMN pair;
+                 DROP TABLE profiles; DROP TABLE profiling; PRAGMA user_version = 1;",
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn a_v1_history_is_paired_once() {
+        let path = std::env::temp_dir().join(format!("isolation-db-v1-{}.db", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let other = |g: &mut GameRecord| g.result.opening = vec!["A1-B2-C3".into(), "D4-E5-F6".into()];
+        let mut alone = game("alone", "a", "c", Color::Red);
+        other(&mut alone);
+        let same_colours = game("same-colours", "a", "b", Color::Red);
+        let mut other_opening = game("other-opening", "b", "a", Color::Red);
+        other(&mut other_opening);
+        {
+            let db = Db::open(&path).unwrap();
+            for g in [
+                game("p1", "a", "b", Color::Red),
+                game("q1", "c", "d", Color::Red),
+                tournament_game("t", "b", "a"),
+                game("p2", "b", "a", Color::Red),
+                game("q2", "d", "c", Color::Red),
+                alone,
+                game("r1", "a", "b", Color::Red),
+                game("r2", "b", "a", Color::Red),
+                game("lone", "a", "b", Color::Red),
+                same_colours,
+                other_opening,
+            ] {
+                db.insert_game(&g, None).unwrap();
+            }
+        }
+        downgrade_to_v1(&path);
+        let paired = expected(&[
+            ("p1", Some("p1")),
+            ("q1", Some("q1")),
+            ("t", None),
+            ("p2", Some("p1")),
+            ("q2", Some("q1")),
+            ("alone", Some("alone")),
+            ("r1", Some("r1")),
+            ("r2", Some("r1")),
+            ("lone", Some("lone")),
+            ("same-colours", Some("same-colours")),
+            ("other-opening", Some("other-opening")),
+        ]);
+        let db = Db::open(&path).unwrap();
+        assert_eq!(pairs(&db), paired);
+        let version: i64 = db
+            .conn()
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        pair_history(db.conn()).unwrap();
+        drop(db);
+        assert_eq!(
+            pairs(&Db::open(&path).unwrap()),
+            paired,
+            "une seconde exécution ne change rien"
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
     #[test]
     fn games_come_back_identical_and_in_order() {
         let db = memory();
@@ -386,8 +573,8 @@ pub(crate) mod tests {
             game: 2,
         });
         let second = game("g1", "b", "a", Color::Black);
-        db.insert_game(&first).unwrap();
-        db.insert_game(&second).unwrap();
+        db.insert_game(&first, None).unwrap();
+        db.insert_game(&second, None).unwrap();
         assert!(!db.is_empty().unwrap());
         assert_eq!(db.games().unwrap(), vec![first.clone(), second]);
         let json: GameRecord = serde_json::from_str(&db.game_json("g2").unwrap().unwrap()).unwrap();
@@ -400,7 +587,7 @@ pub(crate) mod tests {
         let db = memory();
         assert_eq!(db.games_jsonl(&GameFilter::default(), 2).unwrap(), "");
         for id in ["g1", "g2", "g3"] {
-            db.insert_game(&game(id, "a", "b", Color::Red)).unwrap();
+            db.insert_game(&game(id, "a", "b", Color::Red), None).unwrap();
         }
         let ids: Vec<String> = db
             .games_jsonl(&GameFilter::default(), 2)
@@ -414,7 +601,7 @@ pub(crate) mod tests {
     #[test]
     fn columns_and_moves_are_queryable() {
         let db = memory();
-        db.insert_game(&game("g1", "a", "b", Color::Black)).unwrap();
+        db.insert_game(&game("g1", "a", "b", Color::Black), None).unwrap();
         let (winner, reason, plies, invalid): (String, String, i64, i64) = db
             .conn()
             .query_row(
@@ -443,8 +630,8 @@ pub(crate) mod tests {
     #[test]
     fn duplicate_ids_are_refused() {
         let db = memory();
-        db.insert_game(&game("g1", "a", "b", Color::Red)).unwrap();
-        assert!(db.insert_game(&game("g1", "a", "b", Color::Red)).is_err());
+        db.insert_game(&game("g1", "a", "b", Color::Red), None).unwrap();
+        assert!(db.insert_game(&game("g1", "a", "b", Color::Red), None).is_err());
         assert_eq!(db.games().unwrap().len(), 1);
     }
 
@@ -458,6 +645,7 @@ pub(crate) mod tests {
         let db = memory();
         assert_eq!(db.import_jsonl(&path).unwrap(), 2);
         assert_eq!(db.games().unwrap(), games);
+        assert_eq!(pairs(&db), expected(&[("g1", Some("g1")), ("g2", Some("g1"))]));
         let _ = fs::remove_file(&path);
     }
 
@@ -506,7 +694,7 @@ pub(crate) mod tests {
             game: 1,
         });
         for g in [g1, g2, g3, g4] {
-            db.insert_game(&g).unwrap();
+            db.insert_game(&g, None).unwrap();
         }
         db
     }
@@ -658,7 +846,7 @@ pub(crate) mod tests {
         slow.red.build = Some("h1".into());
         slow.node = Some("node-a".into());
         slow.result.move_ms = vec![900, 20, 900];
-        db.insert_game(&slow).unwrap();
+        db.insert_game(&slow, None).unwrap();
         assert_eq!(
             stat(&db, Stat::MoveTimes, None, Some("a")),
             serde_json::json!([
