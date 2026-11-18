@@ -9,4 +9,5 @@ export const queryKeys = {
   health: 'health',
   tournaments: 'tournaments',
   tournament: 'tournament',
+  game: 'game',
 };

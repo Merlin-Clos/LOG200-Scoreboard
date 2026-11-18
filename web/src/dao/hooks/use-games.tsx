@@ -1,7 +1,7 @@
 import { REFRESH_MS } from '@/dao/constants/api.const';
-import { teamUrl, timelineUrl } from '@/dao/scoreboard.repository';
+import { getGame, teamUrl, timelineUrl } from '@/dao/scoreboard.repository';
 import { tail, tailState, type TTailState } from '@/lib/tail';
-import type { TGameRow, TTimelineRow } from '@/types/games.types';
+import type { TGame, TGameRow, TTimelineRow } from '@/types/games.types';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useRef } from 'react';
 import { queryKeys } from './query-keys';
@@ -54,3 +54,12 @@ export const useGetTimeline = () => {
     structuralSharing: false,
   });
 };
+
+// Partie complète ; une partie terminée ne change plus.
+export const useGetGame = (row: Pick<TGameRow, 'id' | 'at'> | undefined) =>
+  useQuery<TGame>({
+    queryKey: [queryKeys.game, row?.id],
+    queryFn: () => getGame(row!),
+    enabled: Boolean(row),
+    staleTime: Infinity,
+  });
