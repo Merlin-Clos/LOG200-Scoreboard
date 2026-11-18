@@ -7,7 +7,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-"$here/build.sh" "$work"
+bash "$here/build.sh" "$work"
 moves=5
 
 # Rend la sortie d'erreur du client profile, joue contre le faux serveur sur PORT.
