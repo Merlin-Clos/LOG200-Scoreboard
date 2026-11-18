@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -14,12 +14,13 @@ use thiserror::Error;
 use isolation_core::board::{ByColor, Color, Move};
 use isolation_core::digest::short_hash;
 use isolation_core::record::{
-    GameRecord, GameResult, Player, Reason, RefereeEvent, TournamentGame, ValidationError, now_rfc3339,
+    GameRecord, GameResult, Measures, Player, Reason, RefereeEvent, TournamentGame, ValidationError, now_rfc3339,
 };
 
 use crate::config::Config;
 use crate::exec::{Executor, GameOutput, GameRun, Local};
 use crate::hub::{self, Hub};
+use crate::measures;
 use crate::node::hub::NodeHub;
 use crate::placement::{Lease, Placement, SlotId};
 
@@ -238,7 +239,9 @@ impl Arena {
             black,
             timeout: cfg.game_timeout(time_ms),
         };
-        let result = self.executor(slot.slot()).run(&run, out)?;
+        let result = self
+            .executor(slot.slot())
+            .run(&run, Arc::clone(&out) as Arc<dyn GameOutput>)?;
         if let Some(absent) = annulled_no_show(&result, fixture, red, black) {
             return Err(GameError::NoShow(absent.id.clone()));
         }
@@ -254,9 +257,27 @@ impl Arena {
             black: black_entry,
             tournament: fixture.map(|f| f.game.clone()),
             node: (!slot.slot().local()).then(|| slot.slot().node.to_string()),
+            measures: bot_measures([red, black], &out.logs, result.moves.len()),
             result,
         })
     }
+}
+
+/// Les mesures des bots de la partie, lues dans leurs journaux ; `None` sans bot mesuré. Le rouge
+/// joue le premier coup client.
+fn bot_measures([red, black]: [&Team; 2], logs: &ByColor<PathBuf>, moves: usize) -> Option<Measures> {
+    let of = |team: &Team, log: &Path, moves: usize| {
+        if team.is_bot() {
+            measures::read(log, moves)
+        } else {
+            Vec::new()
+        }
+    };
+    let measures = Measures {
+        red: of(red, &logs.red, moves.div_ceil(2)),
+        black: of(black, &logs.black, moves / 2),
+    };
+    (!measures.red.is_empty() || !measures.black.is_empty()).then_some(measures)
 }
 
 /// Le direct de la page et les journaux du serveur principal.

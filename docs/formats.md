@@ -144,6 +144,7 @@ Le ladder enregistre chaque partie terminée dans une base SQLite, `db` dans `la
 - `anchor` (absent par défaut) : joueur de référence dont le rating reste à 1500. Sans ancre, le classement est relatif entre les équipes.
 - `remote` (absent par défaut) : l'équipe a joué depuis sa propre machine. Le serveur n'a pas vu son code, et `build` est celui qu'elle déclare.
 - `node` (absent par défaut) : id du nœud de calcul qui a joué la partie (voir « Nœuds ») ; absent, le serveur principal. Une partie de nœud compte comme les autres.
+- `measures` (absent par défaut) : les mesures publiques des bots du ladder, `{"red": [{"depth": 6, "nodes": 123456}, {"nodes": 0}]}`, une par coup de la couleur dans l'ordre de ses coups ; `depth` (dernière profondeur terminée) absent sans recherche. Le ladder les lit à la fin de la partie dans le journal du bot, qui écrit après chaque coup la ligne `ARENA depth=6 nodes=123456` de l'arène isola sur sa sortie d'erreur. Rien n'est publié si leur nombre diffère de celui des coups, ni pour un jar d'équipe, dont les lignes restent privées.
 - `tournament` (absent par défaut) : `{"id": "tournoi-2026-11-08", "match": "W3", "game": 2}`, partie d'un tournoi hebdomadaire (voir [spec-tournoi-hebdo.md](spec-tournoi-hebdo.md)) : id du tournoi, match du tableau et numéro de la manche.
 Le schéma est dans [`crates/isolation-ladder/src/sql/schema.sql`](../crates/isolation-ladder/src/sql/schema.sql) ; sa version est dans `PRAGMA user_version` (2). Un binaire refuse une base de version supérieure à la sienne ; une base v1 passe en v2 à l'ouverture. Les tables :
 
@@ -415,7 +416,7 @@ Un message par trame WebSocket texte, en JSON, distingué par `type` ; une clé 
 | nœud → ladder | `{"type":"heartbeat","running":1,"temp_c":61.5}` | Toutes les 2 s. Sans nouvelles depuis 6 s, le nœud est perdu. |
 | nœud → ladder | `{"type":"event","game":"…","event":{"event":"move","move":"G1-E3-C12","ms":12}}` | Événement de l'arbitre, pour le direct. |
 | nœud → ladder | `{"type":"need","sha256":"…"}` | Le jar n'est pas dans le cache du nœud. |
-| nœud → ladder | `{"type":"result","game":"…","outcome":{"status":"ok","result":{…}},"logs":{"red":"…","black":"…"}}` | Fin de partie : le résultat (revalidé par le ladder) ou `{"status":"infra","side":"red","code":125}` ou `{"status":"error","message":"…"}`, qui annulent la partie ; et la sortie d'erreur de chaque joueur. |
+| nœud → ladder | `{"type":"result","game":"…","outcome":{"status":"ok","result":{…}},"logs":{"red":"…","black":"…"}}` | Fin de partie : le résultat (revalidé par le ladder) ou `{"status":"infra","side":"red","code":125}` ou `{"status":"error","message":"…"}`, qui annulent la partie ; et la sortie d'erreur de chaque joueur (journal plafonné, lignes de mesure comprises). |
 | ladder → nœud | `{"type":"start","game":"…","slot":0,"time_ms":1000,"opening":["…"],"timeout_ms":264000,"red":{"kind":"bot","strategy":"niveau-1","args":[]},"black":{"kind":"jar","sha256":"…"}}` | Joue cette partie sur ce slot du nœud. |
 | ladder → nœud | `{"type":"jar","sha256":"…","size":123}` puis une trame binaire | Le jar demandé ; le nœud vérifie sa taille et son sha256. |
 | ladder → nœud | `{"type":"abort","game":"…"}` | Arrête la partie (délai dépassé côté ladder). |

@@ -13,6 +13,7 @@ mod arena;
 mod bridge;
 mod command;
 mod exec;
+mod measures;
 mod node;
 mod pairs;
 mod placement;
