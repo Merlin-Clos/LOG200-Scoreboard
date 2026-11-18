@@ -43,6 +43,10 @@ jobs:
       - name: Version bump rule
         run: bash tests/release/check.sh
 
+      # Against a fake server in a JDK: one line per move, none with a dedicated reader thread
+      - name: Profiler
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo eclipse-temurin:24-jdk bash sandbox/profiler/test.sh
+
       # Every tracked script, so a new one is checked without being listed here
       - name: Shell scripts
         run: git ls-files -z '*.sh' | xargs -0 shellcheck

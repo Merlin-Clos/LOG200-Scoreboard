@@ -69,9 +69,9 @@ Une **paire** est formée par les deux parties de `spawn_pair` (`play.rs`) : mê
 ### Dans le bac à sable
 
 - Variante de `Profiler.java` d'isola, compilée en `profiler.jar` et montée en lecture seule comme `/bot.jar` : l'image du jar reste sans binaire du ladder. `run-player.sh` ajoute `-javaagent:/profiler.jar` quand `SANDBOX_PROFILE=1`.
-- **Pas de socket de contrôle** (le bac à sable est `--network none`) : le profileur déduit le tour lui-même. C'est son tour quand aucun thread de la JVM n'est bloqué dans une lecture de socket. Toutes les 10 ms pendant le tour, il lit les piles des threads de plateforme qui exécutent du code de l'agent ; les threads virtuels ne sont pas échantillonnés.
-- **Une ligne par tour** sur stderr, au format d'isola (`prof n=… t=… rec=… end=1 Classe.méthode=self:total … @chemin=n …`), plus le temps passé à échantillonner. Pas de vidage toutes les 250 ms.
-- **Contrôle de cohérence** : à la fin de la partie, le ladder compare le nombre de tours détectés au nombre de coups du jar. S'ils diffèrent (thread lecteur dédié, attente active), le profil est marqué « détection douteuse ».
+- **Pas de socket de contrôle** (le bac à sable est `--network none`) : le profileur déduit le tour lui-même. L'agent calcule quand aucun de ses threads n'est bloqué dans une lecture (socket, console) ; rien n'est compté avant la première lecture (démarrage de la JVM). Une lecture de moins de 10 ms peut passer inaperçue : deux tours forment alors un seul segment, quand l'adversaire répond aussi vite. Toutes les 10 ms pendant le calcul, il lit les piles des threads de plateforme qui exécutent du code de l'agent ; les threads virtuels ne sont pas échantillonnés.
+- **Une ligne par segment de calcul** sur stderr, et une pour le dernier à la sortie de la JVM, au format d'isola (`prof n=… t=… rec=… cost=… end=1 Classe.méthode=self:total … @chemin=n …`) ; `t` compte les tics passés à calculer, `cost` le temps passé à échantillonner (µs). Pas de vidage toutes les 250 ms.
+- **Contrôle de cohérence** : à la fin de la partie, le ladder compare le temps échantillonné (somme des `t`) au temps de réflexion du jar (somme de ses `move_ms`). Sous 50 % (thread lecteur dédié, threads virtuels), le profil est marqué « détection douteuse ». Le nombre de segments ne sert pas : les tours fusionnés le rendent inférieur aux coups sans que le profil soit faux.
 
 ### Canal et stockage
 
@@ -106,7 +106,7 @@ Une **paire** est formée par les deux parties de `spawn_pair` (`play.rs`) : mê
 - **XSS** : le jeton en `sessionStorage` est lisible par un script injecté ; React échappe tout, le site n'affiche aucun HTML d'utilisateur.
 - **Rétention, risque accepté** : les profils privés ne sont supprimés qu'à la demande de l'équipe (`DELETE /api/profiles`). Il n'y a pas de purge de fin de session : le profil d'une équipe qui ne le supprime pas reste dans la base du ladder après le cours.
 - **Marge, risque accepté** : un jar peut détecter `-javaagent` et consommer les 25 ms de marge. Borné au ladder, qui sert d'entraînement ; les tournois, qui comptent, sont sans profileur ni marge.
-- **Licence** : isola n'a pas de licence. Reprendre `Profiler.java` demande l'accord écrit de Justin Pagès.
+- **Licence** : isola n'a pas de licence. Justin Pagès a donné son accord écrit (message du 2026-11-18) pour ajouter ses outils au ladder, `Profiler.java` compris.
 
 ## Vérification et versions
 
@@ -158,6 +158,8 @@ Une **paire** est formée par les deux parties de `spawn_pair` (`play.rs`) : mê
 | D21 | Format ARENA, licence | `ARENA` lu sur stderr seulement ; accord écrit de Justin Pagès | Le ladder jette stdout ; isola n'a pas de licence | Red Team | 2026-11-18 |
 | D22 | Tests | En conteneur : `rust:1.99.1`, `node:24`, image du bac à sable | Demande de l'utilisateur ; même environnement que le serveur | Interview | 2026-11-18 |
 | D23 | Versions | Relève automatique après CI verte sur `main`, comme pals ; `version_bump.py` retiré | Plus de relève à la main dans les pull requests | Interview | 2026-11-18 |
+| D24 | Segments de calcul | Une ligne par segment et une à la sortie, au lieu d'une par tour | Une lecture de moins de 10 ms échappe à l'échantillonnage : deux tours fusionnent contre un adversaire rapide | Implémentation | 2026-11-18 |
+| D25 | Détection douteuse | Temps échantillonné sous 50 % du temps de réflexion du jar, au lieu de tours ≠ coups | Robuste aux tours fusionnés ; un thread lecteur dédié reste à 0 % | Implémentation | 2026-11-18 |
 
 ## Dependency Graph & Implementation Order
 
