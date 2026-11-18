@@ -102,8 +102,15 @@ fn to_json<T: serde::Serialize>(value: &T) -> rusqlite::Result<String> {
 }
 
 impl Db {
-    pub fn open(path: &Path) -> rusqlite::Result<Self> {
+    /// Refuse une base écrite par un binaire plus récent : la réécrire en version courante la
+    /// corromprait sans bruit. Un retour arrière passe par une restauration `.backup`.
+    pub fn open(path: &Path) -> anyhow::Result<Self> {
         let conn = Connection::open(path)?;
+        let found: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        anyhow::ensure!(
+            found <= SCHEMA_VERSION,
+            "base v{found}, binaire v{SCHEMA_VERSION} : ce binaire est plus ancien que la base"
+        );
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -342,6 +349,28 @@ pub(crate) mod tests {
 
     pub(crate) fn memory() -> Db {
         Db::open(Path::new(":memory:")).unwrap()
+    }
+
+    #[test]
+    fn a_newer_database_is_refused_and_left_untouched() {
+        let path = std::env::temp_dir().join(format!("isolation-db-newer-{}.db", std::process::id()));
+        let _ = fs::remove_file(&path);
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", SCHEMA_VERSION + 1)
+            .unwrap();
+        let error = Db::open(&path)
+            .err()
+            .expect("a newer database must be refused")
+            .to_string();
+        assert!(error.contains(&format!("v{}", SCHEMA_VERSION + 1)), "{error}");
+        let version: i64 = Connection::open(&path)
+            .unwrap()
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION + 1);
+        Db::open(Path::new(":memory:")).unwrap();
+        fs::remove_file(&path).unwrap();
     }
 
     #[test]

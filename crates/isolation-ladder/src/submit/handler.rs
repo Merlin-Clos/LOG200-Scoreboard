@@ -228,7 +228,7 @@ impl Submissions {
             detail,
         };
         let path = &self.arena.config().db;
-        if let Err(e) = Db::open(path).and_then(|db| db.insert_submission(&row)) {
+        if let Err(e) = Db::open(path).and_then(|db| Ok(db.insert_submission(&row)?)) {
             eprintln!("soumission non journalisée dans {} : {e}", path.display());
         }
     }
