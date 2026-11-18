@@ -68,3 +68,13 @@ export type TRunningGame = {
   black: string;
   tournament?: TTournamentRef;
 };
+
+// Un côté d'un duel : l'équipe et son build, absent pour toutes ses versions.
+export type TDuelSide = { team: string; build?: string };
+
+// Une paire complète du ladder (GET /api/stats/pairs) : deux parties, même ouverture, couleurs inversées.
+export type TDuelPair = {
+  games: [string, string];
+  winners: [string, string];
+  opening: string[];
+};

@@ -3859,3 +3859,42 @@ details[open]>summary~* {
 .analyse-scroll {
     overflow-x: auto;
 }
+
+/* --- Page duel ---------------------------------------------------------------------------- */
+
+/* Une colonne, comme .analyse-layout : la page défile dans le gabarit. */
+.layout.duel-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    grid-template-areas: none;
+    align-content: start;
+    overflow-y: auto;
+}
+
+.duel-builds {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.5rem;
+}
+.duel-builds label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+.duel-verdict {
+    font-size: 1.15rem;
+    font-weight: 600;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+}
+.duel-detail {
+    margin: 0;
+    padding-left: 1.2rem;
+}
+
+.duel-pairs a,
+#duel a {
+    color: var(--color-text);
+}

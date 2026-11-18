@@ -10,4 +10,5 @@ export const queryKeys = {
   tournaments: 'tournaments',
   tournament: 'tournament',
   game: 'game',
+  pairs: 'pairs',
 };

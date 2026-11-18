@@ -1,7 +1,7 @@
 // Lectures du ladder : fichiers publiés dans /data, et API.
 
 import { API, DATA, LATEST_RELEASE, SERVER } from '@/dao/constants/api.const';
-import type { TGame, TGameRow, TRunningGame } from '@/types/games.types';
+import type { TDuelPair, TDuelSide, TGame, TGameRow, TRunningGame } from '@/types/games.types';
 import type { TModel, TQueueFile, TSummary } from '@/types/summary.types';
 import type { TTournament, TTournamentIndex } from '@/types/tournament.types';
 
@@ -44,6 +44,14 @@ export async function getModel(): Promise<TModel | null> {
   } catch {
     return null;
   }
+}
+
+// Paires complètes entre deux équipes ; un build absent : toutes ses versions.
+export function getDuelPairs([a, b]: TDuelSide[]) {
+  const query = new URLSearchParams({ a: a.team, b: b.team });
+  if (a.build) query.set('build_a', a.build);
+  if (b.build) query.set('build_b', b.build);
+  return json<TDuelPair[]>(`${API}/stats/pairs?${query}`);
 }
 
 export async function getGame(row: Pick<TGameRow, 'id' | 'at'>): Promise<TGame> {
