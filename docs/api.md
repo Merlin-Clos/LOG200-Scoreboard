@@ -92,6 +92,15 @@ Une entrée par paire d'équipes qui se sont rencontrées, `a` avant `b` dans l'
 [ { "a": "eq200", "b": "eq417", "games": 412, "a_wins": 230, "b_wins": 182 } ]
 ```
 
+### `pairs?a=<équipe>&b=<équipe>` : paires d'un duel
+
+Les paires complètes du ladder entre `a` et `b` : leurs deux parties ont la même ouverture et des couleurs inversées (colonne `pair`, voir [formats.md](formats.md)). La plus récente d'abord ; tournois exclus ; `session` ignoré. `build_a` et `build_b`, facultatifs, retiennent les paires dont les deux parties ont été jouées avec ces builds ; sans eux, toutes les versions. `a` ou `b` manquant : 400. La page Duel en tire le test du signe, le SPRT et le score.
+
+```json
+[ { "games": ["20261118T101500.000Z-eq07-eq12", "20261118T101530.000Z-eq12-eq07"],
+    "winners": ["eq07", "eq07"], "opening": ["G1-I1-C12", "F12-D10-F1"] } ]
+```
+
 ### `openings` : ouvertures et premiers coups
 
 - `openings` : les 50 ouvertures imposées les plus jouées (demi-coups tirés par le ladder, voir `opening_plies`), avec les victoires du rouge.

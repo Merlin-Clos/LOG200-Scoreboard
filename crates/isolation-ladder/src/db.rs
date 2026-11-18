@@ -19,6 +19,7 @@ mod sql {
     pub const UNPAIRED: &str = include_str!("sql/unpaired.sql");
     pub const SET_PAIR: &str = include_str!("sql/set_pair.sql");
     pub const PAIR_GAME: &str = include_str!("sql/pair_game.sql");
+    pub const DUEL_PAIRS: &str = include_str!("sql/duel_pairs.sql");
     pub const IS_EMPTY: &str = include_str!("sql/is_empty.sql");
     pub const GAMES: &str = include_str!("sql/games.sql");
     pub const GAME: &str = include_str!("sql/game.sql");
@@ -74,6 +75,20 @@ pub struct GameFilter {
     /// L'id d'une partie : seules celles jouées avant elle, pour remonter page par page en passant
     /// l'id de la première ligne reçue. Un id inconnu donne une réponse vide.
     pub before: Option<String>,
+}
+
+/// Le duel de `/api/stats/pairs` : deux équipes et, facultatifs, leurs builds.
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct PairFilter {
+    /// Une équipe (`eq07`).
+    pub a: String,
+    /// L'autre équipe (`eq12`).
+    pub b: String,
+    /// Le build de `a` (`3f9c2a1b`) ; absent : toutes ses versions.
+    pub build_a: Option<String>,
+    /// Le build de `b` ; absent : toutes ses versions.
+    pub build_b: Option<String>,
 }
 
 /// Rating d'une équipe après une partie : `[rating, variation]`, toutes sessions puis dans la session.
@@ -194,6 +209,19 @@ impl Db {
             out.push('\n');
         }
         Ok(out)
+    }
+
+    /// Les paires complètes du duel, en un tableau JSON.
+    pub fn duel_pairs(&self, filter: &PairFilter) -> rusqlite::Result<String> {
+        self.conn.prepare_cached(sql::DUEL_PAIRS)?.query_row(
+            named_params! {
+                ":a": filter.a,
+                ":b": filter.b,
+                ":build_a": filter.build_a,
+                ":build_b": filter.build_b,
+            },
+            |r| r.get(0),
+        )
     }
 
     /// `session` absente : toutes les sessions hors tournois. `team` ne sert qu'aux statistiques d'une équipe.
@@ -697,6 +725,77 @@ pub(crate) mod tests {
             db.insert_game(&g, None).unwrap();
         }
         db
+    }
+
+    /// Les paires de `duel_pairs`, chacune par ses deux ids de partie.
+    fn duel(db: &Db, a: &str, b: &str, build_a: Option<&str>, build_b: Option<&str>) -> Vec<[String; 2]> {
+        let filter = PairFilter {
+            a: a.into(),
+            b: b.into(),
+            build_a: build_a.map(Into::into),
+            build_b: build_b.map(Into::into),
+        };
+        let json = db.duel_pairs(&filter).unwrap();
+        let pairs: Vec<crate::openapi::DuelPair> = serde_json::from_str(&json).unwrap();
+        pairs.into_iter().map(|p| p.games).collect()
+    }
+
+    #[test]
+    fn duel_pairs_are_the_complete_ladder_pairs_of_the_chosen_builds() {
+        let db = memory();
+        // `a` joue avec `build`, `b` avec `x` dans la paire p seulement.
+        let play = |id: &str, red: &str, black: &str, winner: Color, build: &str, after: Option<&str>| {
+            let mut g = game(id, red, black, winner);
+            for player in [&mut g.red, &mut g.black] {
+                player.build = Some(if player.team == "a" { build } else { "y" }.into());
+            }
+            if id.starts_with('p') {
+                let b = if red == "b" { &mut g.red } else { &mut g.black };
+                b.build = Some("x".into());
+            }
+            db.insert_game(&g, after).unwrap();
+        };
+        play("p1", "a", "b", Color::Red, "h1", None);
+        play("p2", "b", "a", Color::Black, "h1", Some("p1"));
+        play("m1", "a", "b", Color::Red, "h1", None);
+        play("m2", "b", "a", Color::Red, "h2", Some("m1"));
+        play("q1", "a", "b", Color::Black, "h2", None);
+        play("q2", "b", "a", Color::Red, "h2", Some("q1"));
+        play("alone", "a", "b", Color::Red, "h1", None);
+        play("c1", "a", "c", Color::Red, "h1", None);
+        play("c2", "c", "a", Color::Red, "h1", Some("c1"));
+        db.insert_game(&tournament_game("t1", "a", "b"), None).unwrap();
+        db.insert_game(&tournament_game("t2", "b", "a"), Some("t1")).unwrap();
+
+        let ids = |pairs: &[[&str; 2]]| -> Vec<[String; 2]> { pairs.iter().map(|p| p.map(Into::into)).collect() };
+        assert_eq!(
+            duel(&db, "a", "b", None, None),
+            ids(&[["q1", "q2"], ["m1", "m2"], ["p1", "p2"]]),
+            "toutes les versions, la plus récente d'abord"
+        );
+        assert_eq!(duel(&db, "a", "b", Some("h1"), None), ids(&[["p1", "p2"]]));
+        assert_eq!(duel(&db, "a", "b", Some("h2"), Some("y")), ids(&[["q1", "q2"]]));
+        assert_eq!(duel(&db, "b", "a", Some("x"), Some("h1")), ids(&[["p1", "p2"]]));
+        assert_eq!(duel(&db, "a", "d", None, None), ids(&[]));
+
+        let json: serde_json::Value = serde_json::from_str(
+            &db.duel_pairs(&PairFilter {
+                a: "b".into(),
+                b: "a".into(),
+                build_a: Some("x".into()),
+                build_b: None,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!([{
+                "games": ["p1", "p2"],
+                "winners": ["a", "a"],
+                "opening": ["G1-I1-C12", "F12-D10-F1"],
+            }])
+        );
     }
 
     fn stat(db: &Db, stat: Stat, session: Option<&str>, team: Option<&str>) -> serde_json::Value {

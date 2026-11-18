@@ -27,10 +27,10 @@ use isolation_core::record::GameRecord;
 use isolation_core::remote::PATH as REMOTE_PATH;
 
 use crate::arena::Arena;
-use crate::db::{Db, GameFilter, Stat};
+use crate::db::{Db, GameFilter, PairFilter, Stat};
 use crate::hub::Hub;
 use crate::openapi::{
-    ApiDoc, BuildRecord, HeadToHead, Jar, MoveTimes, Openings, RatingPoint, SubmissionRecord, TeamRecord,
+    ApiDoc, BuildRecord, DuelPair, HeadToHead, Jar, MoveTimes, Openings, RatingPoint, SubmissionRecord, TeamRecord,
 };
 use crate::remote::{self, Registry, Remote};
 use crate::spectate;
@@ -160,6 +160,7 @@ fn read_routes(db: PathBuf) -> OpenApiRouter {
         .routes(routes!(game))
         .routes(routes!(stats_teams))
         .routes(routes!(stats_head_to_head))
+        .routes(routes!(stats_pairs))
         .routes(routes!(stats_openings))
         .routes(routes!(stats_builds))
         .routes(routes!(stats_ratings))
@@ -322,6 +323,20 @@ async fn stat(db: Arc<PathBuf>, stat: Stat, session: Option<String>, team: Optio
 ))]
 async fn stats_teams(State(db): State<Arc<PathBuf>>, Query(q): Query<Scope>) -> Response {
     stat(db, Stat::Teams, q.session, None).await
+}
+
+/// Les paires complètes du ladder entre deux équipes (même ouverture, couleurs inversées), la plus
+/// récente d'abord, pour la page Duel. Tournois exclus.
+#[utoipa::path(get, path = "/api/stats/pairs", tag = "statistiques", params(PairFilter), responses(
+    (status = 200, body = Vec<DuelPair>),
+    (status = 400, description = "`a` ou `b` manquant."),
+    (status = 500, description = "Base indisponible."),
+))]
+async fn stats_pairs(State(db): State<Arc<PathBuf>>, Query(filter): Query<PairFilter>) -> Response {
+    match blocking(move || Db::open_read(&db)?.duel_pairs(&filter)).await {
+        Ok(body) => json("public, max-age=15", body),
+        Err(e) => unavailable(&e),
+    }
 }
 
 /// Face-à-face de chaque paire d'équipes qui se sont rencontrées.

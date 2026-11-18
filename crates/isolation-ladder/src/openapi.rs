@@ -76,6 +76,17 @@ pub struct HeadToHead {
     pub b_wins: u64,
 }
 
+/// Une paire complète du ladder : deux parties, même ouverture, couleurs inversées.
+#[derive(Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DuelPair {
+    /// Les ids des deux parties, dans l'ordre de jeu.
+    pub games: [String; 2],
+    /// L'équipe gagnante de chaque partie, dans le même ordre.
+    pub winners: [String; 2],
+    pub opening: Vec<String>,
+}
+
 /// Une ouverture imposée par le ladder et les victoires du rouge.
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
