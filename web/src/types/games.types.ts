@@ -59,7 +59,12 @@ export type TGame = Omit<TGameRow, 'moves' | 'node'> & {
   opening?: string[];
   moves: string[];
   move_ms?: number[];
+  // Mesures publiques des bots du ladder, une par coup de leur couleur.
+  measures?: Partial<Record<TColor, TMeasure[]>>;
 };
+
+// Ligne ARENA d'un coup : profondeur terminée (absente sans recherche) et positions visitées.
+export type TMeasure = { depth?: number; nodes: number };
 
 // Partie en cours dans live.json.
 export type TRunningGame = {

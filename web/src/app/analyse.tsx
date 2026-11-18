@@ -70,6 +70,17 @@ const AnalysePage = () => {
   const offset = steps.length - moveMs.length;
   const moverOf = (i: number): TColor => (steps[i].cells[steps[i].move!.to] === RED ? 'red' : 'black');
   const timed = moveMs.map((ms, j) => ({ ms, at: offset + j, color: moverOf(offset + j) }));
+  // Mesures des bots (lignes ARENA), chacune à la position que son coup produit.
+  const firstMove = steps.length - (game?.moves.length ?? 0);
+  const measured = COLORS.flatMap((color) => {
+    const at = steps.map((_, i) => i).filter((i) => i >= firstMove && i > 0 && moverOf(i) === color);
+    return (game?.measures?.[color] ?? []).map((m, j) => {
+      const ms = game?.move_ms?.[at[j] - firstMove];
+      return { color, at: at[j], depth: m.depth, rate: ms ? (1000 * m.nodes) / ms : undefined };
+    });
+  });
+  const depths = measured.flatMap((m) => (m.depth === undefined ? [] : [{ color: m.color, at: m.at, value: m.depth }]));
+  const rates = measured.flatMap((m) => (m.rate === undefined ? [] : [{ color: m.color, at: m.at, value: m.rate }]));
 
   const failure = gameError ?? (gameParam ? null : summaryError);
   const step = steps[k];
@@ -203,6 +214,24 @@ const AnalysePage = () => {
                   onPick={go}
                 />
               )}
+              {[
+                { title: 'Profondeur terminée par le bot', bars: depths },
+                { title: 'Nœuds par seconde du bot', bars: rates },
+              ].map(
+                ({ title, bars }) =>
+                  bars.length > 0 && (
+                    <AnalysisChart
+                      key={title}
+                      title={title}
+                      bars={bars.map((b) => ({ ...b, color: STROKE[b.color] }))}
+                      last={last}
+                      cursor={k}
+                      crit={crit}
+                      tip={analysis.tip}
+                      onPick={go}
+                    />
+                  )
+              )}
             </section>
 
             <section className="section analyse-stats" aria-labelledby="stats-title">
@@ -222,6 +251,8 @@ const AnalysePage = () => {
                     {[
                       ...(timed.length ? [{ label: 'Temps par coup (ms)', of: (c: TColor) => timed.filter((t) => t.color === c).map((t) => t.ms) }] : []),
                       ...MEASURES.map((m) => ({ label: m.label, of: (c: TColor) => analysis[c][m.key] })),
+                      ...(depths.length ? [{ label: 'Profondeur du bot', of: (c: TColor) => depths.filter((d) => d.color === c).map((d) => d.value) }] : []),
+                      ...(rates.length ? [{ label: 'Nœuds par seconde', of: (c: TColor) => rates.filter((r) => r.color === c).map((r) => r.value) }] : []),
                     ].flatMap(({ label, of }) =>
                       COLORS.map((c) => {
                         const d = describe(of(c));
