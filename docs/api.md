@@ -8,6 +8,7 @@ Toutes les routes sont sous `/api/`. Dans le déploiement Docker, Caddy les rela
 | `GET /api/version` | public | version du ladder | |
 | `PUT /api/submit` (ou `POST`) | token d'équipe | soumission d'un jar | [formats.md, Soumission des jars](formats.md#soumission-des-jars) |
 | `GET /api/submit/{id}` | token d'équipe | verdict d'une soumission `?async` | [formats.md, Soumission des jars](formats.md#soumission-des-jars) |
+| `GET`, `PUT /api/profiling` | token d'équipe | profilage du jar actif de l'équipe | ci-dessous |
 | `GET /api/live` | public | parties en cours, en WebSocket | [formats.md, Direct](formats.md#direct-apilive) |
 | `GET /api/remote` | token d'équipe | relais d'une équipe distante, en WebSocket | [formats.md, Jouer à distance](formats.md#jouer-à-distance) |
 | `GET /api/games` | public | les parties complètes, en JSONL, filtrables et paginées | ci-dessous |
@@ -61,6 +62,23 @@ curl https://<ladder>/api/games/20261024T142103.512Z-eq07-eq12
 | --- | --- |
 | 200 | `application/json`, avec `Cache-Control: public, max-age=31536000, immutable` : une partie finie ne change plus, un CDN peut la garder. |
 | 404 | Aucune partie avec cet id (encore en cours, annulée, ou id inconnu). |
+
+## Profilage : `GET`, `PUT /api/profiling`
+
+Le choix de l'équipe du token pour son jar actif (`current.jar`), désactivé par défaut et pour chaque nouveau build. `PUT` prend `{"private": true, "public": false}` : `private` fait tourner le jar avec le profileur (`sandbox/profiler/`, voir [spec-analyse-isola.md](spec-analyse-isola.md#profileur)) ; `public` publiera en plus la part du gabarit, et demande `private`. Les deux routes répondent l'état du build :
+
+```json
+{ "build": "3f9c2a1b5d7e9f01", "private": true, "public": false }
+```
+
+| Code | Sens |
+| --- | --- |
+| 200 | L'état du build actif. |
+| 400 | Corps illisible, ou `public` sans `private`. |
+| 401 | Token absent ou inconnu. |
+| 404 | Aucun jar actif (équipe distante, ou rien soumis). |
+
+Toutes les réponses portent `Cache-Control: private, no-store` et `Vary: Authorization`. Un jar profilé ne joue qu'au serveur principal, dans les parties du ladder : son build n'est plus portable, et ses manches de tournoi se jouent sans profileur. L'arbitre lui accorde une marge de 5 % du temps par coup (25 à 500 ms), qu'il ne voit pas : il reçoit toujours `time_ms`.
 
 ## Statistiques : `GET /api/stats/{nom}`
 

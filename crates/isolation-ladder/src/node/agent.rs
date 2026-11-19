@@ -506,6 +506,7 @@ impl Session<'_> {
                 red: &game.red,
                 black: &game.black,
                 timeout: game.timeout,
+                profile: ByColor::default(),
             };
             let outcome = match exec.run(&run, Arc::clone(&out) as Arc<dyn GameOutput>) {
                 Ok(result) => Outcome::Ok { result },
@@ -556,6 +557,7 @@ impl Session<'_> {
                         red: &game.red,
                         black: &game.black,
                         timeout: game.timeout,
+                        profile: ByColor::default(),
                     };
                     let played = exec.run(&run, Arc::clone(&out) as Arc<dyn GameOutput>);
                     out.take_logs();

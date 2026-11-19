@@ -1,7 +1,7 @@
 //! Base SQLite du ladder, source de vérité des parties et des soumissions. Les requêtes sont dans
 //! `sql/`, le schéma dans `sql/schema.sql` (décrit dans docs/formats.md).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -20,6 +20,9 @@ mod sql {
     pub const SET_PAIR: &str = include_str!("sql/set_pair.sql");
     pub const PAIR_GAME: &str = include_str!("sql/pair_game.sql");
     pub const DUEL_PAIRS: &str = include_str!("sql/duel_pairs.sql");
+    pub const PROFILING: &str = include_str!("sql/profiling.sql");
+    pub const SET_PROFILING: &str = include_str!("sql/set_profiling.sql");
+    pub const PROFILED_BUILDS: &str = include_str!("sql/profiled_builds.sql");
     pub const IS_EMPTY: &str = include_str!("sql/is_empty.sql");
     pub const GAMES: &str = include_str!("sql/games.sql");
     pub const GAME: &str = include_str!("sql/game.sql");
@@ -89,6 +92,15 @@ pub struct PairFilter {
     pub build_a: Option<String>,
     /// Le build de `b` ; absent : toutes ses versions.
     pub build_b: Option<String>,
+}
+
+/// Choix d'une équipe pour un build : `private` profile son jar, `public` publie en plus la part du
+/// gabarit (et demande `private`). Les deux désactivés par défaut, pour chaque nouveau build.
+#[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema, Clone, Copy, Default, PartialEq, Eq, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct Profiling {
+    pub private: bool,
+    pub public: bool,
 }
 
 /// Rating d'une équipe après une partie : `[rating, variation]`, toutes sessions puis dans la session.
@@ -222,6 +234,33 @@ impl Db {
             },
             |r| r.get(0),
         )
+    }
+
+    pub fn profiling(&self, team: &str, build: &str) -> rusqlite::Result<Profiling> {
+        let mut stmt = self.conn.prepare_cached(sql::PROFILING)?;
+        let mut rows = stmt.query(named_params! { ":team": team, ":build": build })?;
+        rows.next()?.map_or(Ok(Profiling::default()), |r| {
+            Ok(Profiling {
+                private: r.get(0)?,
+                public: r.get(1)?,
+            })
+        })
+    }
+
+    pub fn set_profiling(&self, team: &str, build: &str, choice: Profiling) -> rusqlite::Result<()> {
+        self.conn.prepare_cached(sql::SET_PROFILING)?.execute(named_params! {
+            ":team": team,
+            ":build": build,
+            ":private": choice.private,
+            ":public": choice.public,
+        })?;
+        Ok(())
+    }
+
+    /// Les builds profilés, `(équipe, build)` : ils ne jouent pas sur les nœuds.
+    pub fn profiled_builds(&self) -> rusqlite::Result<HashSet<(String, String)>> {
+        let mut stmt = self.conn.prepare_cached(sql::PROFILED_BUILDS)?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
     }
 
     /// `session` absente : toutes les sessions hors tournois. `team` ne sert qu'aux statistiques d'une équipe.
@@ -472,6 +511,47 @@ pub(crate) mod tests {
         assert_eq!(version, SCHEMA_VERSION + 1);
         Db::open(Path::new(":memory:")).unwrap();
         fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn profiling_is_chosen_per_build_and_public_needs_private() {
+        let db = memory();
+        assert_eq!(
+            db.profiling("eq07", "h1").unwrap(),
+            Profiling::default(),
+            "désactivé par défaut"
+        );
+        let private = Profiling {
+            private: true,
+            public: false,
+        };
+        db.set_profiling("eq07", "h1", private).unwrap();
+        assert_eq!(db.profiling("eq07", "h1").unwrap(), private);
+        assert_eq!(
+            db.profiling("eq07", "h2").unwrap(),
+            Profiling::default(),
+            "un nouveau build repart désactivé"
+        );
+        let both = Profiling {
+            private: true,
+            public: true,
+        };
+        db.set_profiling("eq07", "h1", both).unwrap();
+        assert_eq!(db.profiling("eq07", "h1").unwrap(), both);
+        assert!(
+            db.set_profiling(
+                "eq12",
+                "h9",
+                Profiling {
+                    private: false,
+                    public: true
+                }
+            )
+            .is_err()
+        );
+        db.set_profiling("eq12", "h9", Profiling::default()).unwrap();
+        let profiled = db.profiled_builds().unwrap();
+        assert_eq!(profiled, HashSet::from([("eq07".to_string(), "h1".to_string())]));
     }
 
     /// Chaque partie et l'id de la première partie de sa paire, dans l'ordre de jeu.

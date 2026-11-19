@@ -10,7 +10,7 @@ use anyhow::Context;
 use axum::Router;
 use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::{DefaultBodyLimit, Path as UrlPath, Query, State};
-use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, LOCATION};
+use axum::http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, LOCATION, VARY};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -27,7 +27,7 @@ use isolation_core::record::GameRecord;
 use isolation_core::remote::PATH as REMOTE_PATH;
 
 use crate::arena::Arena;
-use crate::db::{Db, GameFilter, PairFilter, Stat};
+use crate::db::{Db, GameFilter, PairFilter, Profiling, Stat};
 use crate::hub::Hub;
 use crate::openapi::{
     ApiDoc, BuildRecord, DuelPair, HeadToHead, Jar, MoveTimes, Openings, RatingPoint, SubmissionRecord, TeamRecord,
@@ -144,6 +144,7 @@ fn submit_routes(submissions: Arc<Submissions>) -> OpenApiRouter {
         .routes(or_404(routes!(version)))
         .routes(or_404(routes!(submit)))
         .routes(or_404(routes!(verdict)))
+        .routes(or_404(routes!(get_profiling, put_profiling)))
         .with_state(SubmitState {
             submissions,
             jobs: Arc::new(Jobs::new()),
@@ -537,6 +538,88 @@ async fn verdict(
         .ok()
         .and_then(|id| state.jobs.verdict(id, &team))
         .ok_or(SubmitError::UnknownSubmission)
+}
+
+/// Le choix de profilage d'une équipe pour son build actif.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+struct ProfilingState {
+    build: String,
+    #[serde(flatten)]
+    choice: Profiling,
+}
+
+/// Le choix de profilage de l'équipe pour son build actif, désactivé tant qu'elle ne l'a pas changé.
+#[utoipa::path(get, path = "/api/profiling", tag = "profileur", security(("token" = [])), responses(
+    (status = 200, body = ProfilingState),
+    (status = 401, description = "Token d'équipe absent ou inconnu."),
+    (status = 404, description = "Aucun jar actif."),
+    (status = 500, description = "Base indisponible."),
+))]
+async fn get_profiling(State(state): State<SubmitState>, headers: HeaderMap) -> Response {
+    private(profiling(&state.submissions, &headers, None).await)
+}
+
+/// Choisit le profilage du build actif de l'équipe : `private` fait tourner son jar avec le profileur
+/// dans les parties du ladder au serveur principal, jamais en tournoi ; `public` publie en plus la
+/// part du gabarit, et demande `private`. Un nouveau build repart désactivé.
+#[utoipa::path(put, path = "/api/profiling", tag = "profileur", security(("token" = [])),
+    request_body = Profiling,
+    responses(
+        (status = 200, body = ProfilingState),
+        (status = 400, description = "Corps illisible, ou `public` sans `private`."),
+        (status = 401, description = "Token d'équipe absent ou inconnu."),
+        (status = 404, description = "Aucun jar actif."),
+        (status = 500, description = "Base indisponible."),
+    ),
+)]
+async fn put_profiling(State(state): State<SubmitState>, headers: HeaderMap, body: Bytes) -> Response {
+    let choice = match serde_json::from_slice::<Profiling>(&body) {
+        Ok(choice) if choice.public && !choice.private => {
+            return private(Err((StatusCode::BAD_REQUEST, "public demande private\n".into())));
+        }
+        Ok(choice) => choice,
+        Err(e) => return private(Err((StatusCode::BAD_REQUEST, format!("corps illisible : {e}\n")))),
+    };
+    private(profiling(&state.submissions, &headers, Some(choice)).await)
+}
+
+/// Lit, et change si `choice` est donné, le choix de l'équipe du token pour son build actif.
+async fn profiling(
+    submissions: &Arc<Submissions>,
+    headers: &HeaderMap,
+    choice: Option<Profiling>,
+) -> Result<String, (StatusCode, String)> {
+    let team = authenticate(submissions, headers)
+        .await
+        .map_err(|e| (e.status(), format!("{e}\n")))?;
+    let submissions = Arc::clone(submissions);
+    blocking(move || {
+        let build = submissions.current_build(&team).ok_or((
+            StatusCode::NOT_FOUND,
+            "aucun jar actif : soumettre un jar d'abord\n".to_owned(),
+        ))?;
+        let unavailable = |e: anyhow::Error| {
+            eprintln!("profilage de {team} : {e:#}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "base indisponible\n".to_owned())
+        };
+        let db = Db::open(submissions.db()).map_err(unavailable)?;
+        if let Some(choice) = choice {
+            db.set_profiling(team.as_str(), &build, choice)
+                .map_err(|e| unavailable(e.into()))?;
+        }
+        let choice = db.profiling(team.as_str(), &build).map_err(|e| unavailable(e.into()))?;
+        serde_json::to_string(&ProfilingState { build, choice }).map_err(|e| unavailable(e.into()))
+    })
+    .await
+}
+
+/// La réponse d'une équipe, refus compris : ni un cache partagé ni le navigateur ne la gardent.
+fn private(result: Result<String, (StatusCode, String)>) -> Response {
+    let headers = [(CACHE_CONTROL, "private, no-store"), (VARY, "Authorization")];
+    match result {
+        Ok(body) => (headers, [(CONTENT_TYPE, "application/json")], body).into_response(),
+        Err((status, body)) => (status, headers, body).into_response(),
+    }
 }
 
 async fn authenticate(submissions: &Arc<Submissions>, headers: &HeaderMap) -> Result<TeamId, SubmitError> {

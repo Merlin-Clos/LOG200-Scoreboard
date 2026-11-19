@@ -31,6 +31,8 @@ pub struct GameRun<'a> {
     pub red: &'a Team,
     pub black: &'a Team,
     pub timeout: Duration,
+    /// Couleurs dont le jar tourne avec le profileur, et une marge chez l'arbitre. Jamais sur un nœud.
+    pub profile: ByColor<bool>,
 }
 
 /// Ce que la partie produit en chemin, en plus de son résultat.
@@ -71,6 +73,7 @@ impl Executor for Local {
             opening: String::new(),
             game,
             time_ms: 0,
+            profile: ByColor::default(),
         };
         drop(CleanupGuard::new(&vars));
     }
@@ -83,6 +86,7 @@ impl Executor for Local {
             opening: notation::join(run.opening),
             game: run.id,
             time_ms: run.time_ms,
+            profile: run.profile,
         };
         let _cleanup = CleanupGuard::new(&vars);
         let referee = RefereeProcess::spawn(&vars, Arc::clone(&out))?;
@@ -461,6 +465,7 @@ pub mod tests {
             red: &red,
             black: &black,
             timeout: Duration::from_secs(10),
+            profile: ByColor::default(),
         };
         let out = Arc::clone(&seen) as Arc<dyn GameOutput>;
         let game = Local::new(cfg).run(&run, out).unwrap();

@@ -207,6 +207,57 @@ fn submit_answers_with_the_status_and_reason_the_teams_ci_reads() {
 }
 
 #[test]
+fn profiling_is_chosen_with_the_team_token_for_its_active_build() {
+    let ladder = Ladder::start("profiling");
+    let token = ladder.add_team("eq01", REGISTRY);
+    let without_jar = ladder.add_team("eq02", REGISTRY);
+    let jar = jar();
+    install(&ladder.dir, "eq01", &jar);
+    let build = isolation_core::digest::short_hash(&jar);
+    let state = |private: bool, public: bool| format!(r#"{{"build":"{build}","private":{private},"public":{public}}}"#);
+
+    assert_eq!(ladder.request("GET", "/api/profiling", None, b"").0, 401);
+    assert_eq!(ladder.request("GET", "/api/profiling", Some(&without_jar), b"").0, 404);
+    assert_eq!(
+        ladder.request("GET", "/api/profiling", Some(&token), b""),
+        (200, state(false, false)),
+        "désactivé par défaut"
+    );
+    for refused in [
+        &br#"{"private":false,"public":true}"#[..],
+        br#"{"private":true}"#,
+        b"oui",
+    ] {
+        assert_eq!(ladder.request("PUT", "/api/profiling", Some(&token), refused).0, 400);
+    }
+    let on = br#"{"private":true,"public":false}"#;
+    assert_eq!(ladder.request("PUT", "/api/profiling", None, on).0, 401);
+    assert_eq!(
+        ladder.request("PUT", "/api/profiling", Some(&token), on),
+        (200, state(true, false))
+    );
+    assert_eq!(
+        ladder.request("GET", "/api/profiling", Some(&token), b""),
+        (200, state(true, false))
+    );
+
+    // Ni un cache partagé ni le navigateur ne gardent la réponse d'une équipe, refus compris.
+    for authorization in [format!("Authorization: Bearer {token}\r\n"), String::new()] {
+        let mut stream = TcpStream::connect(&ladder.submit).unwrap();
+        write!(
+            stream,
+            "GET /api/profiling HTTP/1.1\r\nHost: x\r\n{authorization}Connection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        let head = response.split_once("\r\n\r\n").unwrap().0.to_ascii_lowercase();
+        assert!(head.contains("cache-control: private, no-store"), "{head}");
+        assert!(head.contains("vary: authorization"), "{head}");
+    }
+}
+
+#[test]
 fn live_sends_a_snapshot_first() {
     let ladder = Ladder::start("live");
     let (mut socket, response) = tungstenite::connect(format!("ws://{}/api/live", ladder.live)).unwrap();
@@ -333,6 +384,7 @@ fn openapi_spec_lists_every_http_route() {
             "/api/games",
             "/api/games/{id}",
             "/api/health",
+            "/api/profiling",
             "/api/stats/builds",
             "/api/stats/head-to-head",
             "/api/stats/move-times",

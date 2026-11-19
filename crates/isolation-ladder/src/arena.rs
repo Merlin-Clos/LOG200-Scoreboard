@@ -18,6 +18,7 @@ use isolation_core::record::{
 };
 
 use crate::config::Config;
+use crate::db::Db;
 use crate::exec::{Executor, GameOutput, GameRun, Local};
 use crate::hub::{self, Hub};
 use crate::measures;
@@ -181,6 +182,13 @@ impl Arena {
         self.local.sweep();
     }
 
+    /// L'équipe a demandé le profileur pour ce build. Base illisible : non, la partie se joue sans.
+    fn wants_profile(&self, team: &str, build: &str) -> bool {
+        Db::open_read(&self.cfg.db)
+            .and_then(|db| db.profiling(team, build))
+            .is_ok_and(|choice| choice.private)
+    }
+
     /// Joue sur le slot de `lease` ; sans bail (smoke test), sur un slot du serveur principal.
     pub fn play(
         &self,
@@ -206,6 +214,14 @@ impl Arena {
             remote: team.remote.is_some(),
         };
         let (red_entry, black_entry) = (entry(red), entry(black));
+        // Au ladder et au serveur principal seulement : un tournoi se joue sans profileur ni marge, et
+        // un build profilé ne va pas sur les nœuds.
+        let here = fixture.is_none() && slot.slot().local();
+        let wants = |team: &str, build: &str| self.wants_profile(team, build);
+        let profile = ByColor {
+            red: profiled(here, red, red_entry.build.as_deref(), wants),
+            black: profiled(here, black, black_entry.build.as_deref(), wants),
+        };
         let mut on_air = live.then(|| {
             self.hub.start(&hub::Start {
                 id: &id,
@@ -238,6 +254,7 @@ impl Arena {
             red,
             black,
             timeout: cfg.game_timeout(time_ms),
+            profile,
         };
         let result = self
             .executor(slot.slot())
@@ -261,6 +278,12 @@ impl Arena {
             result,
         })
     }
+}
+
+/// Le jar de `team` tourne avec le profileur : partie du ladder au serveur principal (`here`), jar
+/// d'équipe joué ici, build choisi par l'équipe.
+fn profiled(here: bool, team: &Team, build: Option<&str>, wants: impl Fn(&str, &str) -> bool) -> bool {
+    here && team.remote.is_none() && !team.is_bot() && build.is_some_and(|build| wants(&team.id, build))
 }
 
 /// Les mesures des bots de la partie, lues dans leurs journaux ; `None` sans bot mesuré. Le rouge
@@ -341,6 +364,26 @@ fn build_hash(team: &Team) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_chosen_build_is_profiled_and_only_in_a_ladder_game_here() {
+        let cfg: Config = crate::config::tests::MINIMAL.parse().unwrap();
+        let jar = Team::with_jar(&cfg, &"eq07".parse().unwrap(), std::path::Path::new("j.jar"), false);
+        let wants = |team: &str, build: &str| (team, build) == ("eq07", "h1");
+        assert!(profiled(true, &jar, Some("h1"), wants));
+        assert!(!profiled(false, &jar, Some("h1"), wants), "tournoi ou nœud");
+        assert!(!profiled(true, &jar, Some("h2"), wants), "un autre build");
+        assert!(!profiled(true, &jar, None, wants), "jar illisible");
+        let bot = Team::from(&crate::config::TeamConfig {
+            id: "eq07".into(),
+            cmd: crate::command::CommandTemplate::new(["bot"]),
+            build: None,
+            anchor: false,
+            multithread: false,
+            portable: true,
+        });
+        assert!(!profiled(true, &bot, Some("h1"), wants), "un bot");
+    }
 
     #[test]
     fn games_played_on_a_node_carry_its_id() {
