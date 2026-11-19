@@ -40,6 +40,13 @@ struct Cli {
     first_move_grace_ms: u64,
     #[arg(long, default_value = "127.0.0.1")]
     bind: String,
+    /// Marge du rouge sur chaque coup, à son insu : le temps que le profileur lui prend. Les joueurs
+    /// reçoivent toujours `time_ms`.
+    #[arg(long, env = "ISOLATION_EXTRA_RED_MS", default_value_t = 0)]
+    extra_red_ms: u64,
+    /// Marge du noir, comme `extra_red_ms`.
+    #[arg(long, env = "ISOLATION_EXTRA_BLACK_MS", default_value_t = 0)]
+    extra_black_ms: u64,
 }
 
 #[derive(Clone)]
@@ -80,6 +87,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 players,
                 time: Duration::from_millis(cli.time_ms),
                 first_move_grace: Duration::from_millis(cli.first_move_grace_ms),
+                extra: ByColor {
+                    red: Duration::from_millis(cli.extra_red_ms),
+                    black: Duration::from_millis(cli.extra_black_ms),
+                },
                 max_invalid: cli.max_invalid,
                 moves: Vec::new(),
                 move_ms: Vec::new(),
@@ -215,8 +226,8 @@ fn accept(listener: &TcpListener, deadline: Instant) -> std::io::Result<Option<T
 }
 
 /// `played` ne compte que les coups des clients : le rouge joue le coup 0, le noir le coup 1.
-fn allowed(time: Duration, grace: Duration, played: usize) -> Duration {
-    if played < 2 { time + grace } else { time }
+fn allowed(time: Duration, grace: Duration, extra: Duration, played: usize) -> Duration {
+    extra + if played < 2 { time + grace } else { time }
 }
 
 struct Verdict {
@@ -229,6 +240,8 @@ struct Referee {
     players: ByColor<LineConn>,
     time: Duration,
     first_move_grace: Duration,
+    /// Marge de chaque couleur, ajoutée à chacun de ses coups.
+    extra: ByColor<Duration>,
     max_invalid: u32,
     moves: Vec<Move>,
     move_ms: Vec<u64>,
@@ -285,7 +298,7 @@ impl Referee {
 
     /// Premier coup légal de `turn` avant l'échéance ; chaque coup refusé est répondu par `4`.
     fn receive_move(&mut self, turn: Color) -> Result<Move, Reason> {
-        let deadline = Instant::now() + allowed(self.time, self.first_move_grace, self.moves.len());
+        let deadline = Instant::now() + allowed(self.time, self.first_move_grace, self.extra[turn], self.moves.len());
         loop {
             let line = match self.players[turn].recv(Some(deadline)) {
                 Ok(line) => line,
@@ -332,8 +345,30 @@ mod tests {
     fn only_each_players_first_move_gets_the_grace() {
         let (time, grace) = (Duration::from_millis(500), Duration::from_millis(1000));
         let with_grace = Duration::from_millis(1500);
-        assert_eq!(allowed(time, grace, 0), with_grace);
-        assert_eq!(allowed(time, grace, 1), with_grace);
-        assert_eq!(allowed(time, grace, 2), time);
+        assert_eq!(allowed(time, grace, Duration::ZERO, 0), with_grace);
+        assert_eq!(allowed(time, grace, Duration::ZERO, 1), with_grace);
+        assert_eq!(allowed(time, grace, Duration::ZERO, 2), time);
+    }
+
+    #[test]
+    fn the_margin_of_a_colour_widens_each_of_its_moves() {
+        let (time, grace, extra) = (
+            Duration::from_millis(500),
+            Duration::from_millis(1000),
+            Duration::from_millis(25),
+        );
+        assert_eq!(allowed(time, grace, extra, 0), Duration::from_millis(1525));
+        assert_eq!(allowed(time, grace, extra, 7), Duration::from_millis(525));
+        let cli = Cli::try_parse_from([
+            "isolation-referee",
+            "--port",
+            "1",
+            "--time-ms",
+            "500",
+            "--extra-black-ms",
+            "25",
+        ])
+        .unwrap();
+        assert_eq!((cli.extra_red_ms, cli.extra_black_ms), (0, 25));
     }
 }
