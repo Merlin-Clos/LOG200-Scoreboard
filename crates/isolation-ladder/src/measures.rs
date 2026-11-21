@@ -8,7 +8,7 @@ use std::path::Path;
 use isolation_core::record::Measure;
 
 /// La mesure d'une ligne `ARENA` ; les autres clés et les valeurs illisibles sont ignorées.
-fn parse(line: &str) -> Option<Measure> {
+pub fn parse(line: &str) -> Option<Measure> {
     let mut measure = Measure::default();
     for (key, value) in line
         .strip_prefix("ARENA ")?

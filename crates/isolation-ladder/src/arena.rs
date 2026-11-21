@@ -18,12 +18,13 @@ use isolation_core::record::{
 };
 
 use crate::config::Config;
-use crate::db::Db;
+use crate::db::{Db, Profiling};
 use crate::exec::{Executor, GameOutput, GameRun, Local};
 use crate::hub::{self, Hub};
 use crate::measures;
 use crate::node::hub::NodeHub;
 use crate::placement::{Lease, Placement, SlotId};
+use crate::profile::{self, Profile};
 
 use crate::remote::Seat;
 use crate::roster::Team;
@@ -182,11 +183,11 @@ impl Arena {
         self.local.sweep();
     }
 
-    /// L'équipe a demandé le profileur pour ce build. Base illisible : non, la partie se joue sans.
-    fn wants_profile(&self, team: &str, build: &str) -> bool {
+    /// Le choix de l'équipe pour ce build. Base illisible : rien de choisi, ni profileur ni part publiée.
+    fn profiling(&self, team: &str, build: &str) -> Profiling {
         Db::open_read(&self.cfg.db)
             .and_then(|db| db.profiling(team, build))
-            .is_ok_and(|choice| choice.private)
+            .unwrap_or_default()
     }
 
     /// Joue sur le slot de `lease` ; sans bail (smoke test), sur un slot du serveur principal.
@@ -198,7 +199,7 @@ impl Arena {
         opening: &[Move],
         fixture: Option<&Fixture>,
         live: bool,
-    ) -> Result<GameRecord, GameError> {
+    ) -> Result<Finished, GameError> {
         let cfg = &self.cfg;
         let time_ms = fixture.map_or(cfg.time_ms, |f| f.time_ms);
         // La classe ne compte que pour un smoke test : un slot du serveur principal du bon genre.
@@ -217,7 +218,7 @@ impl Arena {
         // Au ladder et au serveur principal seulement : un tournoi se joue sans profileur ni marge, et
         // un build profilé ne va pas sur les nœuds.
         let here = fixture.is_none() && slot.slot().local();
-        let wants = |team: &str, build: &str| self.wants_profile(team, build);
+        let wants = |team: &str, build: &str| self.profiling(team, build).private;
         let profile = ByColor {
             red: profiled(here, red, red_entry.build.as_deref(), wants),
             black: profiled(here, black, black_entry.build.as_deref(), wants),
@@ -266,7 +267,14 @@ impl Arena {
             on_air.result = Some((result.winner, result.reason));
         }
 
-        Ok(GameRecord {
+        let profiles = jar_profiles(
+            profile,
+            [&red_entry, &black_entry],
+            &out.logs,
+            &result.move_ms,
+            |team, build| self.profiling(team, build).public,
+        );
+        let record = GameRecord {
             id,
             session: fixture.map_or_else(|| cfg.session.clone(), |f| f.game.id.clone()),
             ts,
@@ -276,8 +284,41 @@ impl Arena {
             node: (!slot.slot().local()).then(|| slot.slot().node.to_string()),
             measures: bot_measures([red, black], &out.logs, result.moves.len()),
             result,
-        })
+        };
+        Ok(Finished { record, profiles })
     }
+}
+
+/// Une partie jouée et les profils de ses jars profilés, privés : ils ne vont pas dans le record.
+pub struct Finished {
+    pub record: GameRecord,
+    pub profiles: Vec<Profile>,
+}
+
+/// Les profils des côtés profilés, lus dans leurs journaux ; `public(team, build)` : l'équipe
+/// publie la part du gabarit.
+fn jar_profiles(
+    profiled: ByColor<bool>,
+    [red, black]: [&Player; 2],
+    logs: &ByColor<PathBuf>,
+    move_ms: &[u64],
+    public: impl Fn(&str, &str) -> bool,
+) -> Vec<Profile> {
+    [(Color::Red, red), (Color::Black, black)]
+        .into_iter()
+        .filter(|&(color, _)| profiled[color])
+        .filter_map(|(color, player)| {
+            let build = player.build.as_deref()?;
+            let side = profile::Side {
+                color,
+                team: &player.team,
+                build,
+                move_ms,
+                public: public(&player.team, build),
+            };
+            profile::read(&logs[color], &side)
+        })
+        .collect()
 }
 
 /// Le jar de `team` tourne avec le profileur : partie du ladder au serveur principal (`here`), jar
@@ -386,6 +427,46 @@ mod tests {
     }
 
     #[test]
+    fn only_the_profiled_sides_get_a_profile_from_their_log() {
+        let dir = std::env::temp_dir().join(format!("isolation-profiles-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let logs = ByColor {
+            red: dir.join("red.log"),
+            black: dir.join("black.log"),
+        };
+        fs::write(&logs.red, "prof n=4 t=40 rec=1 cost=9 end=1 Client.main=4:4\n").unwrap();
+        fs::write(&logs.black, "prof n=4 t=40 rec=1 cost=9 end=1\n").unwrap();
+        let player = |team: &str, build: Option<&str>| Player {
+            team: team.into(),
+            build: build.map(Into::into),
+            anchor: false,
+            remote: false,
+        };
+        let (red, black) = (player("eq01", Some("h1")), player("eq02", Some("h2")));
+        let only_red = ByColor {
+            red: true,
+            black: false,
+        };
+        let profiles = jar_profiles(only_red, [&red, &black], &logs, &[30, 10], |team, _| team == "eq01");
+        assert_eq!(profiles.len(), 1);
+        let p = &profiles[0];
+        assert_eq!(
+            (p.color, p.team.as_str(), p.build.as_str(), p.moves),
+            (Color::Red, "eq01", "h1", 1)
+        );
+        assert_eq!(p.tree.think_ms, 30, "le temps du rouge seulement");
+        assert!(p.template.is_some(), "publiée par eq01");
+        let both = ByColor { red: true, black: true };
+        let unbuilt = player("eq02", None);
+        assert_eq!(
+            jar_profiles(both, [&red, &unbuilt], &logs, &[], |_, _| false).len(),
+            1,
+            "sans build"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn games_played_on_a_node_carry_its_id() {
         use crate::bridge::Socket;
         use crate::node::protocol::{FromNode, Outcome, PROTOCOL, ToNode};
@@ -471,7 +552,8 @@ mod tests {
         });
         let record = arena
             .play(Some(&lease), &bot("aleatoire"), &bot("niveau-1"), &[], None, false)
-            .unwrap();
+            .unwrap()
+            .record;
         node.join().unwrap();
         assert_eq!(record.node.as_deref(), Some("node-a"));
         assert!(dir.join("state").join("nodes.json").exists(), "état des nœuds : privé");

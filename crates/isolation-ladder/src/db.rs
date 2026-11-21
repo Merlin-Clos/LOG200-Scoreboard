@@ -11,6 +11,8 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior, named_params};
 use isolation_core::board::Color;
 use isolation_core::record::{GameRecord, Jsonl};
 
+use crate::profile::Profile;
+
 const SCHEMA_VERSION: i64 = 2;
 
 mod sql {
@@ -28,6 +30,7 @@ mod sql {
     pub const GAME: &str = include_str!("sql/game.sql");
     pub const GAMES_FILTER: &str = include_str!("sql/games_filter.sql");
     pub const INSERT_GAME: &str = include_str!("sql/insert_game.sql");
+    pub const INSERT_PROFILE: &str = include_str!("sql/insert_profile.sql");
     pub const INSERT_MOVE: &str = include_str!("sql/insert_move.sql");
     pub const INSERT_RATING: &str = include_str!("sql/insert_rating.sql");
     pub const CLEAR_RATINGS: &str = include_str!("sql/clear_ratings.sql");
@@ -179,11 +182,27 @@ impl Db {
     }
 
     /// `after` : l'id de la première partie de sa paire, si elle a été enregistrée.
-    pub fn insert_game(&self, game: &GameRecord, after: Option<&str>) -> rusqlite::Result<()> {
+    pub fn insert_game(&self, game: &GameRecord, after: Option<&str>, profiles: &[Profile]) -> rusqlite::Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         let seq = insert(&tx, game)?;
         tx.prepare_cached(sql::PAIR_GAME)?
             .execute(named_params! { ":seq": seq, ":after": after })?;
+        let mut stmt = tx.prepare_cached(sql::INSERT_PROFILE)?;
+        for p in profiles {
+            stmt.execute(named_params! {
+                ":game": seq,
+                ":color": name(&p.color),
+                ":team": p.team,
+                ":build": p.build,
+                ":turns": p.segments,
+                ":moves": p.moves,
+                ":overhead_ms": p.overhead_ms,
+                ":tree": to_json(&p.tree)?,
+                ":arena": to_json(&p.arena)?,
+                ":template": p.template.as_ref().map(to_json).transpose()?,
+            })?;
+        }
+        drop(stmt);
         tx.commit()
     }
 
@@ -554,6 +573,65 @@ pub(crate) mod tests {
         assert_eq!(profiled, HashSet::from([("eq07".to_string(), "h1".to_string())]));
     }
 
+    #[test]
+    fn profiles_are_written_with_their_game_or_not_at_all() {
+        use crate::profile::{Profile, TemplateShare, Tree};
+        let db = memory();
+        let profile = |color| Profile {
+            color,
+            team: "a".into(),
+            build: "h1".into(),
+            segments: 3,
+            moves: 4,
+            overhead_ms: 2,
+            tree: Tree {
+                samples: 40,
+                ..Tree::default()
+            },
+            arena: vec![isolation_core::record::Measure {
+                depth: Some(6),
+                nodes: 9,
+            }],
+            template: (color == Color::Black).then(|| TemplateShare {
+                samples: 40,
+                methods: [("Client.main".to_owned(), 1)].into(),
+            }),
+        };
+        let red = profile(Color::Red);
+        db.insert_game(&game("g1", "a", "b", Color::Red), None, &[red, profile(Color::Black)])
+            .unwrap();
+        let rows: Vec<(String, String, String, Option<String>)> = db
+            .conn()
+            .prepare(
+                "SELECT p.color || ' ' || g.id || ' ' || p.team || ' ' || p.build || ' '
+                        || p.turns || ' ' || p.moves || ' ' || p.overhead_ms, p.tree, p.arena, p.template
+                 FROM profiles p JOIN games g ON g.seq = p.game ORDER BY p.color DESC",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let [(red, tree, arena, template), (black, _, _, published)] = &rows[..] else {
+            panic!("{rows:?}")
+        };
+        assert_eq!(
+            (red.as_str(), black.as_str()),
+            ("red g1 a h1 3 4 2", "black g1 a h1 3 4 2")
+        );
+        assert!(tree.starts_with(r#"{"samples":40,"#), "{tree}");
+        assert_eq!(arena, r#"[{"depth":6,"nodes":9}]"#);
+        assert_eq!(template, &None);
+        assert_eq!(
+            published.as_deref(),
+            Some(r#"{"samples":40,"methods":{"Client.main":1}}"#)
+        );
+
+        let twice = [profile(Color::Red), profile(Color::Red)];
+        assert!(db.insert_game(&game("g2", "a", "b", Color::Red), None, &twice).is_err());
+        assert!(db.game_json("g2").unwrap().is_none(), "ni la partie sans ses profils");
+    }
+
     /// Chaque partie et l'id de la première partie de sa paire, dans l'ordre de jeu.
     fn pairs(db: &Db) -> Vec<(String, Option<String>)> {
         db.conn()
@@ -582,11 +660,13 @@ pub(crate) mod tests {
     #[test]
     fn a_ladder_game_joins_the_first_game_of_its_pair() {
         let db = memory();
-        db.insert_game(&game("g1", "a", "b", Color::Red), None).unwrap();
-        db.insert_game(&game("g2", "b", "a", Color::Red), Some("g1")).unwrap();
-        db.insert_game(&game("g3", "a", "b", Color::Red), None).unwrap();
-        db.insert_game(&tournament_game("t1", "a", "b"), None).unwrap();
-        db.insert_game(&tournament_game("t2", "b", "a"), Some("t1")).unwrap();
+        db.insert_game(&game("g1", "a", "b", Color::Red), None, &[]).unwrap();
+        db.insert_game(&game("g2", "b", "a", Color::Red), Some("g1"), &[])
+            .unwrap();
+        db.insert_game(&game("g3", "a", "b", Color::Red), None, &[]).unwrap();
+        db.insert_game(&tournament_game("t1", "a", "b"), None, &[]).unwrap();
+        db.insert_game(&tournament_game("t2", "b", "a"), Some("t1"), &[])
+            .unwrap();
         assert_eq!(
             pairs(&db),
             expected(&[
@@ -635,7 +715,7 @@ pub(crate) mod tests {
                 same_colours,
                 other_opening,
             ] {
-                db.insert_game(&g, None).unwrap();
+                db.insert_game(&g, None, &[]).unwrap();
             }
         }
         downgrade_to_v1(&path);
@@ -682,8 +762,8 @@ pub(crate) mod tests {
             game: 2,
         });
         let second = game("g1", "b", "a", Color::Black);
-        db.insert_game(&first, None).unwrap();
-        db.insert_game(&second, None).unwrap();
+        db.insert_game(&first, None, &[]).unwrap();
+        db.insert_game(&second, None, &[]).unwrap();
         assert!(!db.is_empty().unwrap());
         assert_eq!(db.games().unwrap(), vec![first.clone(), second]);
         let json: GameRecord = serde_json::from_str(&db.game_json("g2").unwrap().unwrap()).unwrap();
@@ -696,7 +776,7 @@ pub(crate) mod tests {
         let db = memory();
         assert_eq!(db.games_jsonl(&GameFilter::default(), 2).unwrap(), "");
         for id in ["g1", "g2", "g3"] {
-            db.insert_game(&game(id, "a", "b", Color::Red), None).unwrap();
+            db.insert_game(&game(id, "a", "b", Color::Red), None, &[]).unwrap();
         }
         let ids: Vec<String> = db
             .games_jsonl(&GameFilter::default(), 2)
@@ -710,7 +790,7 @@ pub(crate) mod tests {
     #[test]
     fn columns_and_moves_are_queryable() {
         let db = memory();
-        db.insert_game(&game("g1", "a", "b", Color::Black), None).unwrap();
+        db.insert_game(&game("g1", "a", "b", Color::Black), None, &[]).unwrap();
         let (winner, reason, plies, invalid): (String, String, i64, i64) = db
             .conn()
             .query_row(
@@ -739,8 +819,8 @@ pub(crate) mod tests {
     #[test]
     fn duplicate_ids_are_refused() {
         let db = memory();
-        db.insert_game(&game("g1", "a", "b", Color::Red), None).unwrap();
-        assert!(db.insert_game(&game("g1", "a", "b", Color::Red), None).is_err());
+        db.insert_game(&game("g1", "a", "b", Color::Red), None, &[]).unwrap();
+        assert!(db.insert_game(&game("g1", "a", "b", Color::Red), None, &[]).is_err());
         assert_eq!(db.games().unwrap().len(), 1);
     }
 
@@ -803,7 +883,7 @@ pub(crate) mod tests {
             game: 1,
         });
         for g in [g1, g2, g3, g4] {
-            db.insert_game(&g, None).unwrap();
+            db.insert_game(&g, None, &[]).unwrap();
         }
         db
     }
@@ -834,7 +914,7 @@ pub(crate) mod tests {
                 let b = if red == "b" { &mut g.red } else { &mut g.black };
                 b.build = Some("x".into());
             }
-            db.insert_game(&g, after).unwrap();
+            db.insert_game(&g, after, &[]).unwrap();
         };
         play("p1", "a", "b", Color::Red, "h1", None);
         play("p2", "b", "a", Color::Black, "h1", Some("p1"));
@@ -845,8 +925,9 @@ pub(crate) mod tests {
         play("alone", "a", "b", Color::Red, "h1", None);
         play("c1", "a", "c", Color::Red, "h1", None);
         play("c2", "c", "a", Color::Red, "h1", Some("c1"));
-        db.insert_game(&tournament_game("t1", "a", "b"), None).unwrap();
-        db.insert_game(&tournament_game("t2", "b", "a"), Some("t1")).unwrap();
+        db.insert_game(&tournament_game("t1", "a", "b"), None, &[]).unwrap();
+        db.insert_game(&tournament_game("t2", "b", "a"), Some("t1"), &[])
+            .unwrap();
 
         let ids = |pairs: &[[&str; 2]]| -> Vec<[String; 2]> { pairs.iter().map(|p| p.map(Into::into)).collect() };
         assert_eq!(
@@ -1026,7 +1107,7 @@ pub(crate) mod tests {
         slow.red.build = Some("h1".into());
         slow.node = Some("node-a".into());
         slow.result.move_ms = vec![900, 20, 900];
-        db.insert_game(&slow, None).unwrap();
+        db.insert_game(&slow, None, &[]).unwrap();
         assert_eq!(
             stat(&db, Stat::MoveTimes, None, Some("a")),
             serde_json::json!([

@@ -15,7 +15,7 @@ use rand::rngs::ThreadRng;
 use isolation_core::record::GameRecord;
 
 use crate::api;
-use crate::arena::{Arena, GameError, Sigterm};
+use crate::arena::{Arena, Finished, GameError, Sigterm};
 use crate::config::Config;
 use crate::db::Db;
 use crate::live::Live;
@@ -270,18 +270,18 @@ fn save(
     cfg: &Config,
     db: &Db,
     standings: &mut Standings,
-    outcome: Result<GameRecord, GameError>,
+    outcome: Result<Finished, GameError>,
     after: Option<&str>,
     [red, black]: [&str; 2],
 ) -> anyhow::Result<Option<GameRecord>> {
-    let record = match outcome {
-        Ok(record) => record,
+    let Finished { record, profiles } = match outcome {
+        Ok(finished) => finished,
         Err(e) => {
             eprintln!("   partie {red} contre {black} annulée : {e}");
             return Ok(None);
         }
     };
-    db.insert_game(&record, after)
+    db.insert_game(&record, after, &profiles)
         .with_context(|| cfg.db.display().to_string())?;
     if let Err(e) = standings.record(&record, db) {
         eprintln!("   classement non publié : {e}");

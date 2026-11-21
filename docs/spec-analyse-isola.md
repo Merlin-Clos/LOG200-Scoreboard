@@ -76,7 +76,7 @@ Une **paire** est formée par les deux parties de `spawn_pair` (`play.rs`) : mê
 ### Canal et stockage
 
 - Le lecteur de stderr du ladder (`exec.rs`) met de côté les lignes qui commencent par `prof ` ou `ARENA `, avec leur propre plafond. Le reste du journal ne change pas : `data/logs/`, 1 Mio, 60 jours, invisible du public.
-- En fin de partie, ces lignes sont analysées et écrites dans la même transaction que la partie : table `profiles (game, color, team, build, turns, moves, overhead_ms, tree, arena, template)` ; la détection est douteuse quand `turns` diffère de `moves`, sans colonne à part.
+- En fin de partie, ces lignes sont analysées et écrites dans la même transaction que la partie : table `profiles (game, color, team, build, turns, moves, overhead_ms, tree, arena, template)` ; `turns` compte les segments ; la détection est douteuse quand le temps échantillonné est sous la moitié du temps de réflexion (D25), marqué dans `tree`.
 - Les nœuds renvoient déjà le stderr des joueurs (`FromNode::Result`) : rien à ajouter, mais un build profilé n'y joue pas.
 
 ## Bots de référence
@@ -95,7 +95,7 @@ Une **paire** est formée par les deux parties de `spawn_pair` (`play.rs`) : mê
 | Reste de stderr | `data/logs/` | Personne | 60 jours, inchangé |
 
 - `GET /api/games/{id}/profile` ne renvoie que le côté de l'appelant. Même 404 si l'équipe n'a pas joué la partie ou n'a pas de profil : la route ne révèle pas l'existence d'un profil.
-- **Gabarit** : liste versionnée des `Classe.méthode` du code de départ du cours (`Board`, `Client`, `GameConnection`, `Square`), tenue par l'opérateur. Une pile ne porte pas les types des paramètres : la correspondance se fait sur la classe et le nom, les surcharges sont fusionnées. La part publique donne le pourcentage d'échantillons par méthode du gabarit et un total « autres » ; ni arbre ni profondeur, qui trahiraient la force de la recherche.
+- **Gabarit** : liste versionnée des `Classe.méthode` du code de départ du cours (`Client`, `GameConnection` et ses classes `Message` et `GameInfo`), tenue par l'opérateur dans `crates/isolation-ladder/src/template.txt`. Une pile ne porte pas les types des paramètres : la correspondance se fait sur la classe et le nom, les surcharges sont fusionnées. La part publique donne le pourcentage d'échantillons par méthode du gabarit et un total « autres » ; ni arbre ni profondeur, qui trahiraient la force de la recherche.
 - **Page Analyse** : une section Profil demande le jeton, gardé en `sessionStorage` (même clé que le formulaire de soumission), et affiche l'arbre d'appels d'isola, la profondeur et le coût de l'échantillonnage, ou « détection douteuse ».
 
 ## Sécurité
@@ -160,6 +160,7 @@ Une **paire** est formée par les deux parties de `spawn_pair` (`play.rs`) : mê
 | D23 | Versions | Relève automatique après CI verte sur `main`, comme pals ; `version_bump.py` retiré | Plus de relève à la main dans les pull requests | Interview | 2026-11-18 |
 | D24 | Segments de calcul | Une ligne par segment et une à la sortie, au lieu d'une par tour | Une lecture de moins de 10 ms échappe à l'échantillonnage : deux tours fusionnent contre un adversaire rapide | Implémentation | 2026-11-18 |
 | D25 | Détection douteuse | Temps échantillonné sous 50 % du temps de réflexion du jar, au lieu de tours ≠ coups | Robuste aux tours fusionnés ; un thread lecteur dédié reste à 0 % | Implémentation | 2026-11-18 |
+| D26 | Gabarit | `Client` et `GameConnection` (avec `Message`, `GameInfo`), sans `Board` ni `Square` ; part gardée en échantillons, le pourcentage calculé à la lecture | Le code de départ ne contient que ces deux fichiers ; des comptes se somment sur plusieurs parties | Implémentation | 2026-11-20 |
 
 ## Dependency Graph & Implementation Order
 
@@ -183,6 +184,6 @@ flowchart LR
 4. **Tri de stderr** : lignes `prof` et `ARENA` mises de côté avec leur plafond, analysées en fin de partie.
 5. **ARENA des bots** : `isolation-bot` imprime profondeur et nœuds par coup ; champ `measures` ; affichage sur la page Analyse.
 6. **Profileur** : variante de `Profiler.java`, montage dans `run-player.sh`, `PUT /api/profiling`, marge par couleur dans l'arbitre, build profilé non portable.
-7. **Profils en base** : écriture avec la partie, contrôle tours contre coups, part du gabarit si publiée.
+7. **Profils en base** : écriture avec la partie, contrôle du temps échantillonné, part du gabarit si publiée.
 8. **Routes privées** : `GET` du profil, `DELETE /api/profiles`, en-têtes de cache, `DELETE` dans le préflight de Caddy, `GET /api/stats/template-share`.
 9. **Interface Analyse** : section Profil (jeton en `sessionStorage`), réglages d'opt-in, part publique.

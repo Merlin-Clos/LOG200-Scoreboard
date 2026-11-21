@@ -18,6 +18,7 @@ mod node;
 mod pairs;
 mod placement;
 mod play;
+mod profile;
 mod roster;
 mod schedule;
 mod thermal;

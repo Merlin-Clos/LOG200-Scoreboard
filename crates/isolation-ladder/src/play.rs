@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 use isolation_core::board::{Color, Move};
 use isolation_core::record::{GameRecord, Player, Reason, TournamentGame, rfc3339_at};
 
-use crate::arena::{Arena, Fixture, GameError};
+use crate::arena::{Arena, Finished, Fixture, GameError};
 use crate::config::Config;
 use crate::hub::Hub;
 use crate::placement::{Lease, PairClass, SlotKind};
@@ -41,7 +41,7 @@ pub enum Report {
     Played {
         red: String,
         black: String,
-        outcome: Result<GameRecord, GameError>,
+        outcome: Result<Finished, GameError>,
         game: Option<TournamentGame>,
         /// L'id de la première partie de sa paire du ladder, si elle a été enregistrée.
         after: Option<String>,
@@ -211,7 +211,7 @@ fn play_and_report(
         let other = elsewhere(arena)?;
         Some(arena.play(Some(&other), red, black, opening, fixture, live))
     });
-    let late = outcome.as_ref().ok().and_then(node_timeout).cloned();
+    let late = outcome.as_ref().ok().and_then(|f| node_timeout(&f.record)).cloned();
     let outcome = match &late {
         Some(player) => {
             eprintln!(
@@ -231,7 +231,7 @@ fn play_and_report(
         Err(GameError::NoShow(_)) => Some(NO_SHOW_RETRY_DELAY),
         Err(_) => Some(RETRY_DELAY),
     };
-    let id = outcome.as_ref().ok().map(|record| record.id.clone());
+    let id = outcome.as_ref().ok().map(|f| f.record.id.clone());
     let _ = reports.send(Report::Played {
         red: red.id.clone(),
         black: black.id.clone(),
