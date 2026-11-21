@@ -11,7 +11,7 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior, named_params};
 use isolation_core::board::Color;
 use isolation_core::record::{GameRecord, Jsonl};
 
-use crate::profile::Profile;
+use crate::profile::{Profile, TemplateShare};
 
 const SCHEMA_VERSION: i64 = 2;
 
@@ -31,6 +31,9 @@ mod sql {
     pub const GAMES_FILTER: &str = include_str!("sql/games_filter.sql");
     pub const INSERT_GAME: &str = include_str!("sql/insert_game.sql");
     pub const INSERT_PROFILE: &str = include_str!("sql/insert_profile.sql");
+    pub const PROFILE: &str = include_str!("sql/profile.sql");
+    pub const DELETE_PROFILES: &str = include_str!("sql/delete_profiles.sql");
+    pub const TEMPLATE_SHARES: &str = include_str!("sql/template_shares.sql");
     pub const INSERT_MOVE: &str = include_str!("sql/insert_move.sql");
     pub const INSERT_RATING: &str = include_str!("sql/insert_rating.sql");
     pub const CLEAR_RATINGS: &str = include_str!("sql/clear_ratings.sql");
@@ -204,6 +207,33 @@ impl Db {
         }
         drop(stmt);
         tx.commit()
+    }
+
+    /// Le profil de `team` dans la partie `id`, en JSON ; `None` si elle n'y en a pas.
+    pub fn profile_json(&self, id: &str, team: &str) -> rusqlite::Result<Option<String>> {
+        let mut stmt = self.conn.prepare_cached(sql::PROFILE)?;
+        let mut rows = stmt.query(named_params! { ":id": id, ":team": team })?;
+        rows.next()?.map(|r| r.get(0)).transpose()
+    }
+
+    /// Supprime tous les profils de `team` ; rend leur nombre.
+    pub fn delete_profiles(&self, team: &str) -> rusqlite::Result<usize> {
+        self.conn
+            .prepare_cached(sql::DELETE_PROFILES)?
+            .execute(named_params! { ":team": team })
+    }
+
+    /// Les parts du gabarit de ce build, si l'équipe le publie ; aucune sinon.
+    pub fn template_shares(&self, team: &str, build: &str) -> rusqlite::Result<Vec<TemplateShare>> {
+        let mut stmt = self.conn.prepare_cached(sql::TEMPLATE_SHARES)?;
+        let rows = stmt.query_map(named_params! { ":team": team, ":build": build }, |r| {
+            r.get::<_, String>(0)
+        })?;
+        rows.map(|text| {
+            serde_json::from_str(&text?)
+                .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+        })
+        .collect()
     }
 
     /// Toutes les parties, dans l'ordre où elles ont été jouées.
@@ -625,6 +655,29 @@ pub(crate) mod tests {
         assert_eq!(
             published.as_deref(),
             Some(r#"{"samples":40,"methods":{"Client.main":1}}"#)
+        );
+
+        let served: crate::openapi::GameProfile =
+            serde_json::from_str(&db.profile_json("g1", "a").unwrap().unwrap()).unwrap();
+        assert_eq!(
+            (served.game.as_str(), served.color.as_str(), served.tree.samples),
+            ("g1", "black", 40)
+        );
+        assert_eq!(db.profile_json("g1", "b").unwrap(), None, "b n'a pas de profil");
+        assert!(db.template_shares("a", "h1").unwrap().is_empty(), "pas publié");
+        db.set_profiling(
+            "a",
+            "h1",
+            Profiling {
+                private: true,
+                public: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            db.template_shares("a", "h1").unwrap().len(),
+            1,
+            "le profil noir seulement"
         );
 
         let twice = [profile(Color::Red), profile(Color::Red)];

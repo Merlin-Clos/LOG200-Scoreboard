@@ -257,6 +257,101 @@ fn profiling_is_chosen_with_the_team_token_for_its_active_build() {
     }
 }
 
+/// Status code, private-cache headers and whole body of a request.
+fn private_response(ladder: &Ladder, method: &str, path: &str, token: Option<&str>) -> (u16, bool, String) {
+    let mut stream = TcpStream::connect(&ladder.submit).unwrap();
+    let authorization = token.map_or_else(String::new, |t| format!("Authorization: Bearer {t}\r\n"));
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: x\r\n{authorization}Content-Length: 0\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let (head, body) = response.split_once("\r\n\r\n").unwrap();
+    let status = head.split(' ').nth(1).unwrap().parse().unwrap();
+    let head = head.to_ascii_lowercase();
+    let private = head.contains("cache-control: private, no-store") && head.contains("vary: authorization");
+    (status, private, body.to_owned())
+}
+
+#[test]
+fn a_team_reads_and_deletes_only_its_own_profiles() {
+    let ladder = Ladder::start("profiles");
+    let token = ladder.add_team("a", REGISTRY);
+    let other = ladder.add_team("b", REGISTRY);
+    let db = rusqlite::Connection::open(ladder.dir.join("state/ladder.db")).unwrap();
+    db.busy_timeout(std::time::Duration::from_secs(5)).unwrap();
+    db.execute(
+        r#"INSERT INTO profiles (game, color, team, build, turns, moves, overhead_ms, tree, arena, template)
+           SELECT seq, 'red', 'a', 'h1', 2, 3, 1,
+                  '{"samples":40,"sampled_ms":400,"think_ms":500,"doubtful":false,"rec":2,"methods":{},"paths":{}}',
+                  '[{"depth":4,"nodes":10}]', '{"samples":40,"methods":{"Client.main":10}}'
+           FROM games WHERE id = 'g1'"#,
+        [],
+    )
+    .unwrap();
+    let profile = "/api/games/g1/profile";
+
+    // Même 404 pour une partie que l'équipe n'a pas jouée, sans profil, ou inconnue.
+    assert_eq!(private_response(&ladder, "GET", profile, None).0, 401);
+    assert_eq!(
+        private_response(&ladder, "GET", profile, Some(&other)),
+        (404, true, "aucun profil\n".into())
+    );
+    assert_eq!(
+        private_response(&ladder, "GET", "/api/games/absent/profile", Some(&token)).0,
+        404
+    );
+    let (status, private, body) = private_response(&ladder, "GET", profile, Some(&token));
+    assert_eq!((status, private), (200, true), "{body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        (&json["game"], &json["color"], &json["build"]),
+        (&"g1".into(), &"red".into(), &"h1".into())
+    );
+    assert_eq!(json["tree"]["sampled_ms"], 400);
+    assert_eq!(json["arena"][0]["depth"], 4);
+    assert!(json.get("template").is_none(), "{json}");
+
+    // La part du gabarit n'est servie que si l'équipe publie ce build.
+    let share = "/api/stats/template-share?team=a&build=h1";
+    assert_eq!(ladder.request("GET", share, None, b"").0, 404);
+    db.execute(
+        "INSERT INTO profiling (team, build, private, public) VALUES ('a', 'h1', 1, 1)",
+        [],
+    )
+    .unwrap();
+    let (status, body) = ladder.request("GET", share, None, b"");
+    assert_eq!(status, 200, "{body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!((&json["games"], &json["samples"]), (&1.into(), &40.into()));
+    assert_eq!(
+        (&json["methods"]["Client.main"], &json["others"]),
+        (&25.0.into(), &75.0.into())
+    );
+    assert_eq!(
+        ladder.request("GET", "/api/stats/template-share?team=a", None, b"").0,
+        400
+    );
+
+    assert_eq!(private_response(&ladder, "DELETE", "/api/profiles", None).0, 401);
+    assert_eq!(
+        private_response(&ladder, "DELETE", "/api/profiles", Some(&other)),
+        (200, true, r#"{"deleted":0}"#.into())
+    );
+    assert_eq!(
+        private_response(&ladder, "DELETE", "/api/profiles", Some(&token)),
+        (200, true, r#"{"deleted":1}"#.into())
+    );
+    assert_eq!(private_response(&ladder, "GET", profile, Some(&token)).0, 404);
+    assert_eq!(
+        ladder.request("GET", share, None, b"").0,
+        404,
+        "supprimée avec le profil"
+    );
+}
+
 #[test]
 fn live_sends_a_snapshot_first() {
     let ladder = Ladder::start("live");
@@ -383,7 +478,9 @@ fn openapi_spec_lists_every_http_route() {
         [
             "/api/games",
             "/api/games/{id}",
+            "/api/games/{id}/profile",
             "/api/health",
+            "/api/profiles",
             "/api/profiling",
             "/api/stats/builds",
             "/api/stats/head-to-head",
@@ -393,6 +490,7 @@ fn openapi_spec_lists_every_http_route() {
             "/api/stats/ratings",
             "/api/stats/submissions",
             "/api/stats/teams",
+            "/api/stats/template-share",
             "/api/submit",
             "/api/submit/{id}",
             "/api/version",

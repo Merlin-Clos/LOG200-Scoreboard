@@ -9,6 +9,8 @@ Toutes les routes sont sous `/api/`. Dans le déploiement Docker, Caddy les rela
 | `PUT /api/submit` (ou `POST`) | token d'équipe | soumission d'un jar | [formats.md, Soumission des jars](formats.md#soumission-des-jars) |
 | `GET /api/submit/{id}` | token d'équipe | verdict d'une soumission `?async` | [formats.md, Soumission des jars](formats.md#soumission-des-jars) |
 | `GET`, `PUT /api/profiling` | token d'équipe | profilage du jar actif de l'équipe | ci-dessous |
+| `GET /api/games/{id}/profile` | token d'équipe | le profil de son jar dans une partie | ci-dessous |
+| `DELETE /api/profiles` | token d'équipe | efface tous ses profils | ci-dessous |
 | `GET /api/live` | public | parties en cours, en WebSocket | [formats.md, Direct](formats.md#direct-apilive) |
 | `GET /api/remote` | token d'équipe | relais d'une équipe distante, en WebSocket | [formats.md, Jouer à distance](formats.md#jouer-à-distance) |
 | `GET /api/games` | public | les parties complètes, en JSONL, filtrables et paginées | ci-dessous |
@@ -79,6 +81,33 @@ Le choix de l'équipe du token pour son jar actif (`current.jar`), désactivé p
 | 404 | Aucun jar actif (équipe distante, ou rien soumis). |
 
 Toutes les réponses portent `Cache-Control: private, no-store` et `Vary: Authorization`. Un jar profilé ne joue qu'au serveur principal, dans les parties du ladder : son build n'est plus portable, et ses manches de tournoi se jouent sans profileur. L'arbitre lui accorde une marge de 5 % du temps par coup (25 à 500 ms), qu'il ne voit pas : il reçoit toujours `time_ms`.
+
+## Profils : `GET /api/games/{id}/profile`, `DELETE /api/profiles`
+
+À la fin d'une partie, le profil de chaque jar profilé est écrit avec elle ; il ne figure jamais dans `GET /api/games/{id}`. `GET /api/games/{id}/profile` rend celui de l'équipe du token, son côté seulement :
+
+```json
+{
+  "game": "20261024T142103.512Z-eq07-eq12", "color": "red", "build": "3f9c2a1b5d7e9f01",
+  "turns": 31, "moves": 32, "overhead_ms": 41,
+  "tree": {
+    "samples": 2480, "sampled_ms": 24790, "think_ms": 25310, "doubtful": false, "rec": 9,
+    "methods": { "Client.main": [0, 2480], "Ia.search": [1900, 2400] },
+    "paths": { "Client.main>Ia.search": 2400 }
+  },
+  "arena": [{ "depth": 6, "nodes": 123456 }]
+}
+```
+
+`tree` est décrit dans [formats.md](formats.md#base-des-parties-stateladderdb) (table `profiles`). `doubtful` : le profileur a vu moins de la moitié du temps de réflexion du jar (thread lecteur dédié, threads virtuels). `arena` : les lignes `ARENA` que le jar imprime lui-même sur stderr.
+
+| Code | Sens |
+| --- | --- |
+| 200 | Le profil. |
+| 401 | Token absent ou inconnu. |
+| 404 | Pas de profil de l'équipe dans cette partie : partie inconnue, jouée par d'autres, ou jar non profilé. La réponse est la même dans les trois cas. |
+
+`DELETE /api/profiles` efface tous les profils de l'équipe du token, part publiée comprise, et rend leur nombre : `{"deleted": 12}`. Sans cela, ils restent dans la base. Les deux routes portent `Cache-Control: private, no-store` et `Vary: Authorization`, refus compris.
 
 ## Statistiques : `GET /api/stats/{nom}`
 
@@ -177,9 +206,20 @@ Les jars soumis par l'équipe, du plus ancien au plus récent, avec leur verdict
 
 | Code | Sens |
 | --- | --- |
+### `template-share?team=<équipe>&build=<build>` : part du gabarit
+
+Sur les parties profilées d'un build, la part des échantillons où une méthode du code de départ du cours (`crates/isolation-ladder/src/template.txt`) est en haut de la pile, en pour cent au dixième ; `others` est le reste. Servie seulement tant que l'équipe publie ce build (`"public": true` dans `PUT /api/profiling`), sinon 404 : ni arbre ni profondeur, qui trahiraient la force de sa recherche. Les chiffres viennent du jar, qui pourrait les fausser : c'est une part déclarée. `session` n'a pas d'effet ici.
+
+```json
+{ "team": "eq07", "build": "3f9c2a1b5d7e9f01", "games": 12, "samples": 29760,
+  "methods": { "Client.main": 0.4, "GameConnection.readMessage": 1.2 }, "others": 98.4 }
+```
+
+| Code | Sens |
+| --- | --- |
 | 200 | `application/json`. |
-| 400 | `builds`, `ratings`, `move-times` ou `submissions` sans `team`, ou paramètres illisibles. |
-| 404 | Statistique inconnue (route inconnue). |
+| 400 | `builds`, `ratings`, `move-times` ou `submissions` sans `team`, `template-share` sans `team` ou `build`, ou paramètres illisibles. |
+| 404 | Statistique inconnue (route inconnue), ou part du gabarit non publiée. |
 
 ## Requêtes libres
 

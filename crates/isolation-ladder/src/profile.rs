@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::LazyLock;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use isolation_core::board::Color;
 use isolation_core::record::Measure;
@@ -42,7 +42,8 @@ pub struct Profile {
 }
 
 /// Les échantillons d'une partie, sommés sur ses segments comme dans l'arène d'isola.
-#[derive(Debug, Default, PartialEq, Serialize)]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Tree {
     /// Piles de threads lues.
     pub samples: u64,
@@ -61,10 +62,52 @@ pub struct Tree {
 }
 
 /// Échantillons en propre des méthodes du gabarit, sur `samples` : le reste va aux « autres ».
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct TemplateShare {
     pub samples: u64,
     pub methods: BTreeMap<String, u64>,
+}
+
+/// La part publiée du gabarit d'un build, sur ses parties profilées : ni arbre ni profondeur.
+#[derive(Debug, PartialEq, Serialize, utoipa::ToSchema)]
+pub struct PublicShare {
+    pub team: String,
+    pub build: String,
+    pub games: usize,
+    pub samples: u64,
+    /// `Classe.méthode` du gabarit → pourcentage des échantillons où elle est en haut de la pile.
+    pub methods: BTreeMap<String, f64>,
+    /// Le reste : le code de l'équipe et la bibliothèque Java qu'il appelle.
+    pub others: f64,
+}
+
+/// Somme les parts de `shares` en pourcentages au dixième ; `None` sans partie publiée.
+pub fn public_share(team: &str, build: &str, shares: &[TemplateShare]) -> Option<PublicShare> {
+    if shares.is_empty() {
+        return None;
+    }
+    let samples: u64 = shares.iter().map(|s| s.samples).sum();
+    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+    for (method, n) in shares.iter().flat_map(|s| &s.methods) {
+        *counts.entry(method.clone()).or_default() += n;
+    }
+    #[expect(clippy::cast_precision_loss, reason = "des comptes d'échantillons, loin de 2^52")]
+    let percent = |n: u64| {
+        if samples == 0 {
+            0.0
+        } else {
+            (1000.0 * n as f64 / samples as f64).round() / 10.0
+        }
+    };
+    let template = counts.values().sum();
+    Some(PublicShare {
+        team: team.to_owned(),
+        build: build.to_owned(),
+        games: shares.len(),
+        samples,
+        others: percent(samples.saturating_sub(template)),
+        methods: counts.into_iter().map(|(method, n)| (method, percent(n))).collect(),
+    })
 }
 
 /// Ce que la partie dit du côté profilé.
@@ -231,6 +274,24 @@ mod tests {
             .doubtful,
             "aucun coup"
         );
+    }
+
+    #[test]
+    fn the_public_share_sums_the_games_in_tenths_of_a_percent() {
+        let share = |samples, main| TemplateShare {
+            samples,
+            methods: BTreeMap::from([("Client.main".to_owned(), main)]),
+        };
+        let public = public_share("eq07", "h1", &[share(200, 10), share(100, 0)]).unwrap();
+        assert_eq!((public.games, public.samples), (2, 300));
+        assert_eq!((public.methods["Client.main"], public.others), (3.3, 96.7));
+        let idle = public_share("eq07", "h1", &[share(0, 0)]).unwrap();
+        assert_eq!(
+            (idle.methods["Client.main"], idle.others),
+            (0.0, 0.0),
+            "aucun échantillon"
+        );
+        assert_eq!(public_share("eq07", "h1", &[]), None);
     }
 
     #[test]
